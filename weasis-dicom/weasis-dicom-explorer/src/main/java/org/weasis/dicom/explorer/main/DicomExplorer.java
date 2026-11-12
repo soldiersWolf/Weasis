@@ -29,6 +29,8 @@ import java.text.MessageFormat;
 import java.util.*;
 import java.util.List;
 import javax.swing.*;
+import javax.swing.JSplitPane;
+import javax.swing.SwingUtilities;
 import javax.swing.event.PopupMenuEvent;
 import javax.swing.event.PopupMenuListener;
 import net.miginfocom.swing.MigLayout;
@@ -60,6 +62,7 @@ import org.weasis.dicom.codec.*;
 import org.weasis.dicom.explorer.*;
 import org.weasis.dicom.explorer.FolderWatcher;
 import org.weasis.dicom.explorer.HangingProtocols.OpeningViewer;
+import org.weasis.dicom.explorer.LocalPersistence;
 import org.weasis.dicom.explorer.Messages;
 import org.weasis.dicom.explorer.exp.ExplorerTask;
 import org.weasis.dicom.explorer.exp.ExportToolBar;
@@ -218,6 +221,10 @@ public class DicomExplorer extends PluginTool
 
   /** Applies the appropriate layout based on current settings. */
   private void buildLayout() {
+    if (verticalLayout && isPatientListEnabled()) {
+      buildSplitLayout();
+      return;
+    }
     if (verticalLayout) {
       setLayout(new MigLayout("fillx, ins 0", "[grow,fill]", "[]rel[grow,fill]unrel[]"));
       add(getMainPanel(), "");
@@ -227,6 +234,42 @@ public class DicomExplorer extends PluginTool
       setLayout(new MigLayout("fillx, ins 0", "[right]rel[grow,fill]"));
       add(GuiUtils.getVerticalBoxLayoutPanel(getMainPanel(), loadingPanel));
       add(thumbnailView);
+    }
+  }
+
+  private static final String P_SPLIT = "explorer.patient.list.split"; // NON-NLS
+
+  /** Patient list above the thumbnails, with a divider the user can drag. */
+  private void buildSplitLayout() {
+    setLayout(new MigLayout("fill, ins 0", "[grow,fill]", "[grow,fill][]")); // NON-NLS
+    JSplitPane split = new JSplitPane(JSplitPane.VERTICAL_SPLIT, getMainPanel(), thumbnailView);
+    split.setResizeWeight(0.65);
+    split.setOneTouchExpandable(true);
+    split.setContinuousLayout(true);
+    split.setBorder(null);
+    double ratio = savedSplitRatio();
+    SwingUtilities.invokeLater(() -> split.setDividerLocation(ratio));
+    split.addPropertyChangeListener(
+        JSplitPane.DIVIDER_LOCATION_PROPERTY,
+        _ -> {
+          int height = split.getHeight() - split.getDividerSize();
+          if (height > 0 && split.isShowing()) {
+            LocalPersistence.getProperties()
+                .setProperty(
+                    P_SPLIT, String.valueOf((double) split.getDividerLocation() / height));
+          }
+        });
+    add(split, "grow"); // NON-NLS
+    add(loadingPanel, "newline"); // NON-NLS
+  }
+
+  private static double savedSplitRatio() {
+    try {
+      double saved =
+          Double.parseDouble(LocalPersistence.getProperties().getProperty(P_SPLIT, "0.65"));
+      return saved > 0.05 && saved < 0.98 ? saved : 0.65;
+    } catch (NumberFormatException e) {
+      return 0.65;
     }
   }
 
@@ -272,7 +315,9 @@ public class DicomExplorer extends PluginTool
       if (isPatientListEnabled()) {
         patientList = new PatientListPanel(this, modelPatient);
         patientSelectionManager.addPatientSelectionListener(patientList);
-        panelMain.add(patientList, "newline, spanx, grow"); // NON-NLS
+        panelMain.setLayout(
+            new MigLayout("fill, ins 5 0 5 0", "[grow,fill]", "[grow,fill]")); // NON-NLS
+        panelMain.add(patientList, "grow"); // NON-NLS
         // The series filter bar is left out on purpose: the name search above replaces it
         koOpen.setVisible(false);
         return panelMain;

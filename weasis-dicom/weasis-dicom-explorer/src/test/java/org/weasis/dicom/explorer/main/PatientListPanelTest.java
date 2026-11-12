@@ -31,7 +31,11 @@ class PatientListPanelTest {
     MediaSeriesGroup patient = mock(MediaSeriesGroup.class);
     when(patient.toString()).thenReturn(name);
     return new VisitRow(
-        patient, mock(MediaSeriesGroup.class), date, time == null ? null : LocalTime.parse(time));
+        patient,
+        mock(MediaSeriesGroup.class),
+        date,
+        time == null ? null : LocalTime.parse(time),
+        "ProScan"); // NON-NLS
   }
 
   private static String describe(Row row) {
@@ -77,6 +81,11 @@ class PatientListPanelTest {
     assertEquals(
         List.of("v 2026-11-12 (1)", "Today", "> 2026-11-11 (2)"),
         rows.stream().map(PatientListPanelTest::describe).toList());
+  }
+
+  @Test
+  void eachSourceKeepsTheSameBadgeColor() {
+    assertEquals(PatientListPanel.badgeColor("PACS-1"), PatientListPanel.badgeColor("PACS-1"));
   }
 
   @Test
