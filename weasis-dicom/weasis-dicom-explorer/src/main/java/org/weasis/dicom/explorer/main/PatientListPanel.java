@@ -399,8 +399,7 @@ public class PatientListPanel extends JPanel
               "watching",
               String.join(", ", folders.stream().map(FolderWatcher::labelOf).toList())));
       watched.setToolTipText(
-          String.join("
-", folders.stream().map(Path::toString).toList()));
+          String.join("\n", folders.stream().map(Path::toString).toList()));
     }
   }
 

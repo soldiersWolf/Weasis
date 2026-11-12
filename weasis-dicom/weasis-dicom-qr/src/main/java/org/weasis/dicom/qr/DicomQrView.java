@@ -316,7 +316,7 @@ public class DicomQrView extends AbstractItemDialogPage implements ImportDicom, 
   private QueryProcess process;
   private AuthMethod authMethod;
   private static final String LAST_CHECKED_ARCHIVES = "lastCheckedArchives";
-  private static final String ARCHIVE_SEPARATOR = "";
+  private static final String ARCHIVE_SEPARATOR = "\u001f";
   private final JButton archivesButton = new JButton();
   // Descriptions of the archives ticked for a search on several archives at once
   private final Set<String> checkedArchives = new LinkedHashSet<>();
