@@ -123,7 +123,7 @@ public final class ProScanFix {
       return fragment;
     }
     int end = fragment.length;
-    while (end - start > 2 && !(fragment[end - 2] == (byte) 0xFF && fragment[end - 1] == (byte) 0xD9)) {
+    while (end - start > 2 && !isEndOfCodestream(fragment, end)) {
       end--;
     }
     byte[] cs = Arrays.copyOfRange(fragment, start, end);
@@ -148,6 +148,10 @@ public final class ProScanFix {
     return cs;
   }
 
+  private static boolean isEndOfCodestream(byte[] data, int end) {
+    return data[end - 2] == (byte) 0xFF && data[end - 1] == (byte) 0xD9;
+  }
+
   private static int indexOf(byte[] data, byte[] pattern) {
     outer:
     for (int i = 0; i <= data.length - pattern.length; i++) {
@@ -169,7 +173,8 @@ public final class ProScanFix {
       VR vr = dataset.getVR(tag);
       if (TEXT_VR.contains(vr) && dataset.getValue(tag) instanceof byte[] raw) {
         String text = new String(raw, SOURCE_CHARSET).replace("\0", "").trim();
-        dataset.setString(tag, vr, SINGLE_VALUE_VR.contains(vr) ? new String[] {text} : text.split("\\\\"));
+        String[] values = SINGLE_VALUE_VR.contains(vr) ? new String[] {text} : text.split("\\\\");
+        dataset.setString(tag, vr, values);
       }
     }
     dataset.setString(Tag.SpecificCharacterSet, VR.CS, "ISO_IR 192");
@@ -186,7 +191,8 @@ public final class ProScanFix {
     }
     dataset.setString(Tag.PatientOrientation, VR.CS, "L", "F");
     if (!dataset.containsValue(Tag.PatientID) || dataset.getString(Tag.PatientID, "").isBlank()) {
-      String key = dataset.getString(Tag.PatientName, "") + "|" + dataset.getString(Tag.PatientBirthDate, "");
+      String name = dataset.getString(Tag.PatientName, "");
+      String key = name + "|" + dataset.getString(Tag.PatientBirthDate, "");
       dataset.setString(Tag.PatientID, VR.LO, "PS" + shortHash(key)); // NON-NLS
     }
   }
@@ -207,7 +213,7 @@ public final class ProScanFix {
     Mat src = img.toMat();
     Mat low = new Mat();
     Core.inRange(src, new Scalar(0), new Scalar(DC_OFFSET - 1.0), low);
-    boolean shifted = Core.countNonZero(low) < src.total() / 1000;
+    boolean shifted = Core.countNonZero(low) * 1000L < src.total();
     low.release();
 
     ImageCV fixed = new ImageCV();
