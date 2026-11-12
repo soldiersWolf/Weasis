@@ -48,6 +48,7 @@ public class DicomQrFactory implements DicomImportFactory {
     PropertiesUtil.loadProperties(
         BundlePreferences.getFileInDataFolder(context.getBundleContext(), "import.properties"),
         DicomQrView.getPersistence());
+    ServerWatcher.getInstance().start();
   }
 
   @Deactivate
