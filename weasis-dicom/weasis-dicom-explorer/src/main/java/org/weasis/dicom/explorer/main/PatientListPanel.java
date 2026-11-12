@@ -48,6 +48,7 @@ import javax.swing.JPopupMenu;
 import javax.swing.JRadioButtonMenuItem;
 import javax.swing.JScrollPane;
 import javax.swing.JTextField;
+import javax.swing.JToggleButton;
 import javax.swing.KeyStroke;
 import javax.swing.ListCellRenderer;
 import javax.swing.ListModel;
@@ -93,7 +94,8 @@ public class PatientListPanel extends JPanel
       MediaSeriesGroup study,
       LocalDate date,
       LocalTime time,
-      String source)
+      String source,
+      boolean remote)
       implements Row {}
 
   /** How much is shown for each visit. */
@@ -122,6 +124,13 @@ public class PatientListPanel extends JPanel
   private final JTextField search = new JTextField();
   private final JLabel count = new JLabel();
   private final JComboBox<String> sourceFilter = new JComboBox<>();
+  // Studies read from folders and studies retrieved from servers are two separate lists
+  private final JToggleButton localTab = new JToggleButton();
+  private final JToggleButton remoteTab = new JToggleButton();
+  private final JPanel tabBar =
+      new JPanel(new MigLayout("ins 0, gap 2, fillx", "[grow,fill][grow,fill]")); // NON-NLS
+  private boolean showRemote;
+  private int remoteVisits;
   private final JButton viewButton = new JButton(PatientListMessages.getString("view"));
   private Density density = loadDensity();
   private boolean manySources;
@@ -186,7 +195,22 @@ public class PatientListPanel extends JPanel
     JPanel searchBar = new JPanel(new MigLayout("ins 0, fillx", "[grow,fill]2[]")); // NON-NLS
     searchBar.add(search, "growx"); // NON-NLS
     searchBar.add(viewButton);
-    add(searchBar, "growx"); // NON-NLS
+    ButtonGroup tabs = new ButtonGroup();
+    for (JToggleButton tab : List.of(localTab, remoteTab)) {
+      tab.putClientProperty(
+          FlatClientProperties.BUTTON_TYPE, FlatClientProperties.BUTTON_TYPE_TAB);
+      tab.addActionListener(
+          _ -> {
+            showRemote = tab == remoteTab;
+            refresh();
+          });
+      tabs.add(tab);
+      tabBar.add(tab, "growx"); // NON-NLS
+    }
+    localTab.setSelected(true);
+    tabBar.setVisible(false);
+    add(tabBar, "growx, hidemode 3"); // NON-NLS
+    add(searchBar, "newline, growx"); // NON-NLS
     add(sourceFilter, "newline, growx, hidemode 3"); // NON-NLS
     add(count, "newline, growx"); // NON-NLS
     add(scroll, "newline, grow, push, height 80lp:360lp:"); // NON-NLS
@@ -347,7 +371,7 @@ public class PatientListPanel extends JPanel
     return rows;
   }
 
-  private List<VisitRow> collectVisits(String query, String sourceOnly) {
+  private List<VisitRow> collectVisits(String query, String sourceOnly, Boolean remoteOnly) {
     DicomModel model = explorer.getDataExplorerModel();
     String local = PatientListMessages.getString("source.local");
     List<VisitRow> visits = new ArrayList<>();
@@ -357,14 +381,17 @@ public class PatientListPanel extends JPanel
         for (MediaSeriesGroup study : model.getChildren(patient)) {
           String studyUid = TagD.getTagValue(study, Tag.StudyInstanceUID, String.class);
           String from = StudySources.get(studyUid).orElse(local);
-          if (sourceOnly == null || sourceOnly.equals(from)) {
+          boolean remote = StudySources.kindOf(studyUid) == StudySources.Kind.REMOTE;
+          if ((sourceOnly == null || sourceOnly.equals(from))
+              && (remoteOnly == null || remoteOnly == remote)) {
             visits.add(
                 new VisitRow(
                     patient,
                     study,
                     TagD.getTagValue(study, Tag.StudyDate, LocalDate.class),
                     TagD.getTagValue(study, Tag.StudyTime, LocalTime.class),
-                    from));
+                    from,
+                    remote));
           }
         }
       }
@@ -375,11 +402,12 @@ public class PatientListPanel extends JPanel
   private void refresh() {
     Row selected = list.getSelectedValue();
     String query = search.getText().strip().toLowerCase(Locale.ROOT);
-    List<VisitRow> all = collectVisits("", null);
+    updateTabs(collectVisits("", null, null));
+    List<VisitRow> all = collectVisits("", null, showRemote);
     updateSourceFilter(all);
     String sourceOnly =
         sourceFilter.getSelectedIndex() > 0 ? (String) sourceFilter.getSelectedItem() : null;
-    List<VisitRow> visits = collectVisits(query, sourceOnly);
+    List<VisitRow> visits = collectVisits(query, sourceOnly, showRemote);
     LocalDate latest =
         visits.stream().map(VisitRow::date).filter(Objects::nonNull).max(LocalDate::compareTo)
             .orElse(null);
@@ -407,6 +435,26 @@ public class PatientListPanel extends JPanel
         visits.size() == total
             ? PatientListMessages.format("count.all", total)
             : PatientListMessages.format("count", visits.size(), total));
+  }
+
+  /**
+   * Shows the folder and server tabs once a study was retrieved from a server, and opens the
+   * server tab when the first ones arrive.
+   */
+  private void updateTabs(List<VisitRow> everything) {
+    int remote = (int) everything.stream().filter(VisitRow::remote).count();
+    int local = everything.size() - remote;
+    if (remote > 0 && remoteVisits == 0) {
+      showRemote = true;
+    } else if (remote == 0) {
+      showRemote = false;
+    }
+    remoteVisits = remote;
+    localTab.setText(PatientListMessages.format("tab.local", local));
+    remoteTab.setText(PatientListMessages.format("tab.remote", remote));
+    localTab.setSelected(!showRemote);
+    remoteTab.setSelected(showRemote);
+    tabBar.setVisible(remote > 0);
   }
 
   /** Lists the sources in the filter, which is shown only when there is more than one. */

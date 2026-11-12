@@ -35,7 +35,8 @@ class PatientListPanelTest {
         mock(MediaSeriesGroup.class),
         date,
         time == null ? null : LocalTime.parse(time),
-        "ProScan"); // NON-NLS
+        "ProScan", // NON-NLS
+        false);
   }
 
   private static String describe(Row row) {

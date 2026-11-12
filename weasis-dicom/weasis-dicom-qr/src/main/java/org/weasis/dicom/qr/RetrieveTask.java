@@ -120,7 +120,7 @@ public class RetrieveTask extends ExplorerTask<ExplorerTask<Boolean, String>, St
     AbstractDicomNode selectedItem = source.archive();
     if (selectedItem != null) {
       for (String studyUid : selection.getStudyUids()) {
-        StudySources.register(studyUid, selectedItem.getDescription());
+        StudySources.registerRemote(studyUid, selectedItem.getDescription());
       }
     }
     if (selectedItem instanceof final DefaultDicomNode node) {
