@@ -45,7 +45,7 @@ import org.weasis.core.ui.editor.image.ViewerPlugin;
 import org.weasis.dicom.codec.DicomSeries;
 import org.weasis.dicom.codec.TagD;
 import org.weasis.dicom.explorer.DicomModel;
-import org.weasis.dicom.explorer.main.DicomExplorer.ListPosition;
+import org.weasis.dicom.explorer.DicomSorter;
 
 /**
  * Always-visible list of every loaded patient, with a name search. Selecting a row, with the mouse
@@ -99,16 +99,34 @@ public class PatientListPanel extends JPanel
       return;
     }
     explorer.selectPatient(patient);
-    if (explorer.getSeriesGroupFromPatient(patient, ListPosition.FIRST)
-        instanceof DicomSeries series) {
-      // One viewer at a time: the picked patient replaces the previous one, as in a light box
-      List<ViewerPlugin<?>> open = new ArrayList<>(GuiUtils.getUICore().getViewerPlugins());
-      if (!open.isEmpty()) {
-        GuiUtils.getUICore().closeSeriesViewer(open);
+    DicomModel model = explorer.getDataExplorerModel();
+    firstSeries(model, patient)
+        .ifPresent(
+            series -> {
+              // One viewer at a time: the picked patient replaces the previous one
+              List<ViewerPlugin<?>> open =
+                  new ArrayList<>(GuiUtils.getUICore().getViewerPlugins());
+              if (!open.isEmpty()) {
+                GuiUtils.getUICore().closeSeriesViewer(open);
+              }
+              ThumbnailMouseAndKeyAdapter.openSeriesInDefaultPlugin(series, model);
+            });
+  }
+
+  /** First displayable series of the patient, in the explorer's study and series order. */
+  static Optional<DicomSeries> firstSeries(DicomModel model, MediaSeriesGroup patient) {
+    List<MediaSeriesGroup> studies = new ArrayList<>(model.getChildren(patient));
+    studies.sort(DicomSorter.STUDY_COMPARATOR);
+    for (MediaSeriesGroup study : studies) {
+      List<MediaSeriesGroup> series = new ArrayList<>(model.getChildren(study));
+      series.sort(DicomSorter.SERIES_COMPARATOR);
+      for (MediaSeriesGroup s : series) {
+        if (s instanceof DicomSeries dicomSeries && !DicomModel.isHiddenModality(dicomSeries)) {
+          return Optional.of(dicomSeries);
+        }
       }
-      ThumbnailMouseAndKeyAdapter.openSeriesInDefaultPlugin(
-          series, explorer.getDataExplorerModel());
     }
+    return Optional.empty();
   }
 
   private void refresh() {
