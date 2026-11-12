@@ -12,8 +12,6 @@ package org.weasis.dicom.qr;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 import java.io.IOException;
 import java.util.List;
@@ -22,13 +20,11 @@ import java.util.Set;
 import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.Tag;
 import org.dcm4che3.data.VR;
-import org.dcm4che3.net.Status;
 import org.junit.jupiter.api.Test;
 import org.weasis.core.api.media.data.MediaSeriesGroupNode;
 import org.weasis.dicom.explorer.pref.node.AbstractDicomNode;
 import org.weasis.dicom.explorer.pref.node.AbstractDicomNode.UsageType;
 import org.weasis.dicom.explorer.pref.node.DefaultDicomNode;
-import org.weasis.dicom.param.DicomState;
 
 class MultiArchiveSearchTest {
 
@@ -47,11 +43,8 @@ class MultiArchiveSearchTest {
     return item;
   }
 
-  private static DicomState answer(Attributes... items) {
-    DicomState state = mock(DicomState.class);
-    when(state.getDicomRSP()).thenReturn(List.of(items));
-    when(state.getStatus()).thenReturn(Status.Success);
-    return state;
+  private static MultiArchiveSearch.DimseAnswer answer(Attributes... items) {
+    return new MultiArchiveSearch.DimseAnswer(List.of(items), null);
   }
 
   private static MultiArchiveSearch searchAll() {

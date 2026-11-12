@@ -49,7 +49,18 @@ public class MultiArchiveSearch {
 
   /** Queries the studies of one DIMSE archive (C-FIND). */
   public interface DimseQuery {
-    DicomState find(DefaultDicomNode archive) throws Exception;
+    DimseAnswer find(DefaultDicomNode archive) throws Exception;
+  }
+
+  /**
+   * Studies returned by a DIMSE archive, with the error message when the query did not complete.
+   */
+  public record DimseAnswer(List<Attributes> items, String error) {
+    public static DimseAnswer of(DicomState state) {
+      int status = state.getStatus();
+      boolean ok = status == Status.Success || status == Status.Pending;
+      return new DimseAnswer(state.getDicomRSP(), ok ? null : String.valueOf(state.getMessage()));
+    }
   }
 
   private final DicomModel model = new DicomModel();
@@ -96,8 +107,8 @@ public class MultiArchiveSearch {
       AbstractDicomNode archive, DimseQuery dimse, Function<WebQueryTarget, RsQuery> web) {
     try {
       if (archive instanceof DefaultDicomNode node) {
-        DicomState state = dimse.find(node);
-        List<Attributes> items = state.getDicomRSP();
+        DimseAnswer answer = dimse.find(node);
+        List<Attributes> items = answer.items();
         synchronized (model) {
           if (items != null) {
             for (Attributes item : items) {
@@ -111,8 +122,8 @@ public class MultiArchiveSearch {
             }
           }
         }
-        if (state.getStatus() != Status.Success && state.getStatus() != Status.Pending) {
-          failures.put(archive, String.valueOf(state.getMessage()));
+        if (answer.error() != null) {
+          failures.put(archive, answer.error());
         }
       } else if (archive instanceof DicomWebNode node) {
         RsQuery query = web.apply(new WebQueryTarget(node, authByArchive.get(node), model));

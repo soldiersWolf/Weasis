@@ -980,13 +980,14 @@ public class DicomQrView extends AbstractItemDialogPage implements ImportDicom {
                   throw new IllegalStateException(
                       Messages.getString("RetrieveTask.no_calling_node"));
                 }
-                return CFind.process(
-                    buildFindParams(fuzzy),
-                    callingNode.getDicomNodeWithOnlyAET(),
-                    node.getDicomNode(),
-                    limit,
-                    QueryRetrieveLevel.STUDY,
-                    findParams.toArray(new DicomParam[0]));
+                return MultiArchiveSearch.DimseAnswer.of(
+                    CFind.process(
+                        buildFindParams(fuzzy),
+                        callingNode.getDicomNodeWithOnlyAET(),
+                        node.getDicomNode(),
+                        limit,
+                        QueryRetrieveLevel.STUDY,
+                        findParams.toArray(new DicomParam[0])));
               },
               target -> {
                 Properties props = target.baseProperties();
