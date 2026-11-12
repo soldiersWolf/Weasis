@@ -261,14 +261,7 @@ public final class ServerWatcher {
               search.getStudyUids().stream()
                   .filter(uid -> search.getArchive(uid).orElse(null) == archive)
                   .count();
-      DicomWebNode wadoRs = null;
-      if (part != null && failure == null && archive instanceof DicomWebNode web) {
-        wadoRs = silentWadoRsNode(web);
-        if (wadoRs == null) {
-          failure = MultiArchiveMessages.getString("sync.nowado");
-          part.getStudyUids().forEach(requested::remove); // Try again once it is configured
-        }
-      }
+      DicomWebNode wadoRs = DicomQrView.findWadoRsNode(archive, null);
       int fetched = part == null || failure != null ? 0 : part.getStudyUids().size();
       record(archive, found, fetched, failure);
       if (part != null && failure == null) {
@@ -281,27 +274,6 @@ public final class ServerWatcher {
                 new RetrieveTask.RetrieveSource(archive, wadoRs, search.getAuthMethod(archive))));
       }
     }
-  }
-
-  /**
-   * WADO-RS node of the same host as the QIDO-RS archive, chosen without asking: a background check
-   * must never open a dialog.
-   */
-  private static DicomWebNode silentWadoRsNode(DicomWebNode archive) {
-    if (archive.getWebType() != WebType.QIDORS || archive.getUrl() == null) {
-      return null;
-    }
-    String host = RetrieveTask.getHostname(archive.getUrl().getHost());
-    for (AbstractDicomNode n :
-        AbstractDicomNode.loadDicomNodes(
-            AbstractDicomNode.Type.WEB, UsageType.RETRIEVE, WebType.WADORS)) {
-      if (n instanceof DicomWebNode wn
-          && wn.getUrl() != null
-          && RetrieveTask.getHostname(wn.getUrl().getHost()).contains(host)) {
-        return wn;
-      }
-    }
-    return null;
   }
 
   private void record(AbstractDicomNode archive, int found, int retrieved, String error) {

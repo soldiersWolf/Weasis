@@ -1516,17 +1516,30 @@ public class DicomQrView extends AbstractItemDialogPage implements ImportDicom, 
     return findWadoRsNode(archive, this);
   }
 
-  /** WADO-RS node downloading the images of a QIDO-RS archive, null for a DIMSE archive. */
+  /**
+   * DICOMweb node downloading the images of a DICOMweb archive, null for a DIMSE archive: a
+   * WADO-RS or all-services node of the same host, otherwise the archive itself, since most
+   * servers (Orthanc, dcm4chee) serve QIDO-RS and WADO-RS under the same root. Never asks: the
+   * former lookup kept only WADO-URI nodes and so always failed for WADO-RS.
+   */
   static DicomWebNode findWadoRsNode(AbstractDicomNode archive, Component parent) {
-    if (archive instanceof DicomWebNode webNode && webNode.getWebType() == WebType.QIDORS) {
-      List<AbstractDicomNode> webNodes =
-          AbstractDicomNode.loadDicomNodes(
-              AbstractDicomNode.Type.WEB, AbstractDicomNode.UsageType.RETRIEVE, WebType.WADORS);
-      String host = RetrieveTask.getHostname(webNode.getUrl().getHost());
-      String m1 = Messages.getString("DicomQrView.no.url.matches.with.the.qido");
-      return RetrieveTask.getWadoUrl(parent, host, webNodes, m1);
+    if (!(archive instanceof DicomWebNode webNode)) {
+      return null;
     }
-    return null;
+    if (webNode.getWebType() != WebType.QIDORS || webNode.getUrl() == null) {
+      return webNode;
+    }
+    String host = RetrieveTask.getHostname(webNode.getUrl().getHost());
+    for (AbstractDicomNode n :
+        AbstractDicomNode.loadDicomNodes(
+            AbstractDicomNode.Type.WEB, AbstractDicomNode.UsageType.RETRIEVE, WebType.WADORS)) {
+      if (n instanceof DicomWebNode wn
+          && wn.getUrl() != null
+          && RetrieveTask.getHostname(wn.getUrl().getHost()).equals(host)) {
+        return wn;
+      }
+    }
+    return webNode;
   }
 
   public JComboBox<AbstractDicomNode> getComboDestinationNode() {
