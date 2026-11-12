@@ -21,7 +21,6 @@ import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.Tag;
 import org.dcm4che3.data.VR;
 import org.junit.jupiter.api.Test;
-import org.weasis.core.api.media.data.MediaSeriesGroupNode;
 import org.weasis.dicom.explorer.pref.node.AbstractDicomNode;
 import org.weasis.dicom.explorer.pref.node.AbstractDicomNode.UsageType;
 import org.weasis.dicom.explorer.pref.node.DefaultDicomNode;
@@ -48,7 +47,8 @@ class MultiArchiveSearchTest {
   }
 
   private static MultiArchiveSearch searchAll() {
-    MultiArchiveSearch search = new MultiArchiveSearch(Map.of());
+    // The merged patient tree needs a running Weasis: only the archive bookkeeping is tested here
+    MultiArchiveSearch search = new MultiArchiveSearch(Map.of(), (_, _) -> {});
     search.run(
         List.of(FIRST, SECOND, DOWN),
         node -> {
@@ -67,12 +67,16 @@ class MultiArchiveSearchTest {
   }
 
   @Test
-  void mergesTheStudiesOfAllArchivesUnderOnePatient() {
-    MultiArchiveSearch search = searchAll();
+  void reportsAnArchiveFailingWithAnError() {
+    MultiArchiveSearch search = new MultiArchiveSearch(Map.of(), (_, _) -> {});
+    search.run(
+        List.of(FIRST),
+        _ -> {
+          throw new LinkageError("Broken class"); // NON-NLS
+        },
+        _ -> null);
 
-    var patients = search.getModel().getChildren(MediaSeriesGroupNode.rootNode);
-    assertEquals(1, patients.size());
-    assertEquals(2, search.getModel().getChildren(patients.iterator().next()).size());
+    assertEquals(Set.of(FIRST), search.getFailures().keySet());
   }
 
   @Test

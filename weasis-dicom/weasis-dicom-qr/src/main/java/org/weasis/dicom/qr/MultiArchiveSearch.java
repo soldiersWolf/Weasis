@@ -19,9 +19,11 @@ import java.util.Optional;
 import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.function.BiConsumer;
 import java.util.function.Function;
 import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.Tag;
@@ -67,9 +69,18 @@ public class MultiArchiveSearch {
   private final Map<String, AbstractDicomNode> archiveByStudy = new ConcurrentHashMap<>();
   private final Map<AbstractDicomNode, AuthMethod> authByArchive;
   private final Map<AbstractDicomNode, String> failures = new ConcurrentHashMap<>();
+  private final BiConsumer<DicomModel, Attributes> populate;
 
   public MultiArchiveSearch(Map<AbstractDicomNode, AuthMethod> authByArchive) {
+    this(authByArchive, RsQuery::populateDicomModel);
+  }
+
+  /** The populate function adds one study answer to the merged model. */
+  MultiArchiveSearch(
+      Map<AbstractDicomNode, AuthMethod> authByArchive,
+      BiConsumer<DicomModel, Attributes> populate) {
     this.authByArchive = Map.copyOf(authByArchive);
+    this.populate = populate;
   }
 
   /**
@@ -86,18 +97,20 @@ public class MultiArchiveSearch {
       return;
     }
     try (ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor()) {
-      List<Future<?>> tasks = new ArrayList<>();
+      Map<AbstractDicomNode, Future<?>> tasks = new LinkedHashMap<>();
       for (AbstractDicomNode archive : archives) {
-        tasks.add(pool.submit(() -> query(archive, dimse, web)));
+        tasks.put(archive, pool.submit(() -> query(archive, dimse, web)));
       }
-      for (Future<?> task : tasks) {
+      for (Map.Entry<AbstractDicomNode, Future<?>> task : tasks.entrySet()) {
         try {
-          task.get();
+          task.getValue().get();
         } catch (InterruptedException e) {
           Thread.currentThread().interrupt();
           return;
-        } catch (Exception e) {
-          LOGGER.error("Multi-archive query", e);
+        } catch (ExecutionException e) {
+          // An error, not an exception, escaped the query: still report the archive as failed
+          LOGGER.error("Query of the archive {}", task.getKey(), e.getCause());
+          failures.putIfAbsent(task.getKey(), String.valueOf(e.getCause()));
         }
       }
     }
@@ -113,7 +126,7 @@ public class MultiArchiveSearch {
           if (items != null) {
             for (Attributes item : items) {
               if (item != null) {
-                RsQuery.populateDicomModel(model, item);
+                populate.accept(model, item);
                 String uid = item.getString(Tag.StudyInstanceUID);
                 if (uid != null) {
                   archiveByStudy.putIfAbsent(uid, archive);
