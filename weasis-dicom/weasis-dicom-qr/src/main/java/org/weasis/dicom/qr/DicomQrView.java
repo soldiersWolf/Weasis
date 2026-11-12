@@ -22,11 +22,15 @@ import java.time.temporal.WeekFields;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.EnumSet;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Locale.Category;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Properties;
+import java.util.StringJoiner;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
@@ -35,6 +39,7 @@ import java.util.stream.Stream;
 import javax.swing.ComboBoxModel;
 import javax.swing.DefaultComboBoxModel;
 import javax.swing.JButton;
+import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
 import javax.swing.JFormattedTextField;
 import javax.swing.JLabel;
@@ -306,6 +311,11 @@ public class DicomQrView extends AbstractItemDialogPage implements ImportDicom {
   private final JSpinner pageSpinner = new JSpinner();
   private QueryProcess process;
   private AuthMethod authMethod;
+  private static final String LAST_ALL_ARCHIVES = "lastAllArchives";
+  private final JCheckBox allArchives = new JCheckBox(MultiArchiveMessages.getString("all"));
+  private final JLabel multiStatus = new JLabel();
+  // Result of the last query on all archives, null after a query on a single archive
+  private volatile MultiArchiveSearch multiSearch;
   private final SpinnerProgress progressBar = new SpinnerProgress();
   final JLabel lblCalling =
       new JLabel(Messages.getString("DicomQrView.calling_node") + StringUtil.COLON);
@@ -391,11 +401,22 @@ public class DicomQrView extends AbstractItemDialogPage implements ImportDicom {
     GuiUtils.setPreferredWidth(comboDestinationNode, 250, 150);
 
     comboDicomRetrieveType.setToolTipText(Messages.getString("DicomQrView.msg_sel_type"));
+    allArchives.setToolTipText(MultiArchiveMessages.getString("all.tip"));
+    allArchives.setSelected(
+        Boolean.parseBoolean(getPersistence().getProperty(LAST_ALL_ARCHIVES, "false")));
+    allArchives.addActionListener(
+        _ -> {
+          getPersistence().setProperty(LAST_ALL_ARCHIVES, String.valueOf(allArchives.isSelected()));
+          applySelectedArchive();
+        });
+    multiStatus.setForeground(UIManager.getColor("Component.error.focusedBorderColor"));
     return GuiUtils.getFlowLayoutPanel(
         ITEM_SEPARATOR_SMALL,
         ITEM_SEPARATOR,
         lblDest,
         comboDestinationNode,
+        allArchives,
+        multiStatus,
         GuiUtils.boxHorizontalStrut(BLOCK_SEPARATOR),
         lblRetrieve,
         comboDicomRetrieveType);
@@ -752,43 +773,18 @@ public class DicomQrView extends AbstractItemDialogPage implements ImportDicom {
     }
 
     AtomicBoolean running = new AtomicBoolean(true);
+    multiSearch = null;
+    multiStatus.setText(null);
+    if (allArchives.isSelected()) {
+      queryAllArchives(p, fuzzy, running);
+      return;
+    }
 
     AbstractDicomNode selectedItem = (AbstractDicomNode) comboDestinationNode.getSelectedItem();
     if (selectedItem instanceof final DefaultDicomNode node) {
-      CharsetEncoding encoding = (CharsetEncoding) comboCharset.getSelectedItem();
-      if (encoding == null) {
-        encoding = CharsetEncoding.ISO_IR_192;
-      }
-      p.add(new DicomParam(Tag.SpecificCharacterSet, encoding.getLabel()));
-
+      addStudyFindParams(p);
       DefaultDicomNode callingNode = (DefaultDicomNode) comboCallingNode.getSelectedItem();
-
-      // see http://dicom.nema.org/medical/dicom/current/output/html/part04.html#sect_C.6
-      addReturnTags(p, CFind.PatientName);
-      addReturnTags(p, CFind.PatientID);
-      addReturnTags(p, CFind.PatientSex);
-      addReturnTags(p, CFind.PatientBirthDate);
-      addReturnTags(p, CFind.IssuerOfPatientID);
-
-      addReturnTags(p, CFind.StudyInstanceUID);
-      addReturnTags(p, CFind.StudyDescription);
-      addReturnTags(p, CFind.StudyDate);
-      addReturnTags(p, CFind.StudyTime);
-      addReturnTags(p, CFind.AccessionNumber);
-      addReturnTags(p, CFind.ReferringPhysicianName);
-      addReturnTags(p, CFind.StudyID);
-      addReturnTags(p, new DicomParam(Tag.ModalitiesInStudy));
-      addReturnTags(p, new DicomParam(Tag.NumberOfStudyRelatedSeries));
-      addReturnTags(p, new DicomParam(Tag.NumberOfStudyRelatedInstances));
-
-      AdvancedParams params = new AdvancedParams();
-      ConnectOptions connectOptions = new ConnectOptions();
-      connectOptions.setConnectTimeout(3000);
-      connectOptions.setAcceptTimeout(5000);
-      params.setConnectOptions(connectOptions);
-      if (fuzzy) {
-        params.setQueryOptions(EnumSet.of(QueryOption.FUZZY));
-      }
+      AdvancedParams params = buildFindParams(fuzzy);
 
       Runnable runnable =
           () -> {
@@ -888,6 +884,184 @@ public class DicomQrView extends AbstractItemDialogPage implements ImportDicom {
     }
   }
 
+  /** Adds the character set and the study attributes a C-FIND must return. */
+  private void addStudyFindParams(List<DicomParam> p) {
+    CharsetEncoding encoding = (CharsetEncoding) comboCharset.getSelectedItem();
+    if (encoding == null) {
+      encoding = CharsetEncoding.ISO_IR_192;
+    }
+    p.add(new DicomParam(Tag.SpecificCharacterSet, encoding.getLabel()));
+
+    // see http://dicom.nema.org/medical/dicom/current/output/html/part04.html#sect_C.6
+    addReturnTags(p, CFind.PatientName);
+    addReturnTags(p, CFind.PatientID);
+    addReturnTags(p, CFind.PatientSex);
+    addReturnTags(p, CFind.PatientBirthDate);
+    addReturnTags(p, CFind.IssuerOfPatientID);
+
+    addReturnTags(p, CFind.StudyInstanceUID);
+    addReturnTags(p, CFind.StudyDescription);
+    addReturnTags(p, CFind.StudyDate);
+    addReturnTags(p, CFind.StudyTime);
+    addReturnTags(p, CFind.AccessionNumber);
+    addReturnTags(p, CFind.ReferringPhysicianName);
+    addReturnTags(p, CFind.StudyID);
+    addReturnTags(p, new DicomParam(Tag.ModalitiesInStudy));
+    addReturnTags(p, new DicomParam(Tag.NumberOfStudyRelatedSeries));
+    addReturnTags(p, new DicomParam(Tag.NumberOfStudyRelatedInstances));
+  }
+
+  private static AdvancedParams buildFindParams(boolean fuzzy) {
+    AdvancedParams params = new AdvancedParams();
+    ConnectOptions connectOptions = new ConnectOptions();
+    connectOptions.setConnectTimeout(3000);
+    connectOptions.setAcceptTimeout(5000);
+    params.setConnectOptions(connectOptions);
+    if (fuzzy) {
+      params.setQueryOptions(EnumSet.of(QueryOption.FUZZY));
+    }
+    return params;
+  }
+
+  /** Authentication of a DICOMweb archive, null when the user did not sign in. */
+  private static AuthMethod resolveAuthMethod(DicomWebNode node) {
+    AuthMethod auth = AuthenticationPersistence.getAuthMethod(node.getAuthMethodUid());
+    if (!OAuth2ServiceFactory.NO_AUTH.equals(auth)) {
+      String oldCode = auth.getCode();
+      if (auth.getToken() == null) {
+        return null;
+      }
+      if (!Objects.equals(oldCode, auth.getCode())) {
+        AuthenticationPersistence.saveMethod();
+      }
+    }
+    return auth;
+  }
+
+  private List<AbstractDicomNode> getArchives() {
+    List<AbstractDicomNode> archives = new ArrayList<>();
+    for (int i = 0; i < comboDestinationNode.getItemCount(); i++) {
+      archives.add(comboDestinationNode.getItemAt(i));
+    }
+    return archives;
+  }
+
+  /** Queries every configured archive at once and shows the merged result. */
+  private void queryAllArchives(List<DicomParam> p, boolean fuzzy, AtomicBoolean running) {
+    List<AbstractDicomNode> archives = new ArrayList<>();
+    Map<AbstractDicomNode, AuthMethod> auths = new HashMap<>();
+    for (AbstractDicomNode archive : getArchives()) {
+      if (archive instanceof DicomWebNode web) {
+        AuthMethod auth = resolveAuthMethod(web);
+        if (auth == null) {
+          continue; // Not signed in: skip this archive rather than block the others
+        }
+        auths.put(web, auth);
+      }
+      archives.add(archive);
+    }
+    DefaultDicomNode callingNode = (DefaultDicomNode) comboCallingNode.getSelectedItem();
+    int limit = (Integer) limitSpinner.getValue();
+    List<DicomParam> findParams = MultiArchiveSearch.copy(p);
+    addStudyFindParams(findParams);
+    MultiArchiveSearch search = new MultiArchiveSearch(auths);
+
+    Runnable runnable =
+        () -> {
+          GuiExecutor.execute(
+              () -> {
+                progressBar.setEnabled(true);
+                progressBar.setIndeterminate(true);
+              });
+          search.run(
+              archives,
+              node -> {
+                if (callingNode == null) {
+                  throw new IllegalStateException(
+                      Messages.getString("RetrieveTask.no_calling_node"));
+                }
+                return CFind.process(
+                    buildFindParams(fuzzy),
+                    callingNode.getDicomNodeWithOnlyAET(),
+                    node.getDicomNode(),
+                    limit,
+                    QueryRetrieveLevel.STUDY,
+                    findParams.toArray(new DicomParam[0]));
+              },
+              target -> {
+                Properties props = target.baseProperties();
+                if (limit > 0) {
+                  props.setProperty(
+                      RsQueryParams.P_PAGE_EXT, "&limit=%d&offset=0".formatted(limit)); // NON-NLS
+                }
+                RsQuery query =
+                    new RsQuery(
+                        target.model(),
+                        props,
+                        MultiArchiveSearch.copy(p),
+                        target.authMethod(),
+                        target.node().getHeaders());
+                query.setFuzzyMatching(fuzzy);
+                return query;
+              });
+          if (running.get()) {
+            GuiExecutor.execute(
+                () -> {
+                  progressBar.setEnabled(false);
+                  progressBar.setIndeterminate(false);
+                  multiSearch = search;
+                  tree.setRetrieveTreeModel(new RetrieveTreeModel(search.getModel()));
+                  tree.revalidate();
+                  tree.repaint();
+                  showMultiStatus(search);
+                });
+          }
+        };
+    process = new QueryProcess(runnable, "Multi-archive query", running); // NON-NLS
+    process.start();
+  }
+
+  private void showMultiStatus(MultiArchiveSearch search) {
+    Map<AbstractDicomNode, String> failures = search.getFailures();
+    if (failures.isEmpty()) {
+      multiStatus.setText(null);
+      multiStatus.setToolTipText(null);
+      return;
+    }
+    StringJoiner names = new StringJoiner(", ");
+    StringJoiner details = new StringJoiner("<br>", "<html>", "</html>"); // NON-NLS
+    failures.forEach(
+        (node, reason) -> {
+          names.add(node.getDescription());
+          details.add(node.getDescription() + ": " + reason);
+        });
+    multiStatus.setText(MultiArchiveMessages.format("unreachable", names.toString()));
+    multiStatus.setToolTipText(details.toString());
+  }
+
+  /** Archive to query and retrieve a study from: the one that returned it on a multi query. */
+  private Object archiveOf(String studyUid) {
+    MultiArchiveSearch search = multiSearch;
+    if (search != null && studyUid != null) {
+      Optional<AbstractDicomNode> archive = search.getArchive(studyUid);
+      if (archive.isPresent()) {
+        return archive.get();
+      }
+    }
+    return comboDestinationNode.getSelectedItem();
+  }
+
+  private AuthMethod authOf(Object archive) {
+    MultiArchiveSearch search = multiSearch;
+    if (search != null && archive instanceof AbstractDicomNode node) {
+      AuthMethod auth = search.getAuthMethod(node);
+      if (auth != null) {
+        return auth;
+      }
+    }
+    return authMethod;
+  }
+
   private static void addReturnTags(List<DicomParam> list, DicomParam p) {
     if (list.stream().noneMatch(d -> d.getTag() == p.getTag())) {
       list.add(p);
@@ -969,14 +1143,19 @@ public class DicomQrView extends AbstractItemDialogPage implements ImportDicom {
 
   private void applySelectedArchive() {
     Object selectedItem = comboDestinationNode.getSelectedItem();
-    boolean dcmOption = selectedItem instanceof DefaultDicomNode;
+    boolean all = allArchives.isSelected();
+    boolean dcmOption =
+        all
+            ? getArchives().stream().anyMatch(DefaultDicomNode.class::isInstance)
+            : selectedItem instanceof DefaultDicomNode;
+    comboDestinationNode.setEnabled(!all);
     lblCalling.setEnabled(dcmOption);
     lblRetrieve.setEnabled(dcmOption);
     comboDicomRetrieveType.setEnabled(dcmOption);
     comboCallingNode.setEnabled(dcmOption);
     lblCharset.setEnabled(dcmOption);
     comboCharset.setEnabled(dcmOption);
-    pageSpinner.setEnabled(!dcmOption);
+    pageSpinner.setEnabled(!dcmOption && !all);
     pageSpinner.removeChangeListener(queryListener);
     pageSpinner.setValue(1);
     pageSpinner.addChangeListener(queryListener);
@@ -1123,7 +1302,7 @@ public class DicomQrView extends AbstractItemDialogPage implements ImportDicom {
   private void loadSeriesInTree(RetrieveTreeModel treeModel, DefaultMutableTreeNode studyNode) {
     MediaSeriesGroup study = (MediaSeriesGroup) studyNode.getUserObject();
     String studyUid = TagD.getTagValue(study, Tag.StudyInstanceUID, String.class);
-    Object selectedItem = comboDestinationNode.getSelectedItem();
+    Object selectedItem = archiveOf(studyUid);
     if (!StringUtil.hasText(studyUid)) {
       treeModel.removePlaceholder(studyNode);
       return;
@@ -1160,7 +1339,7 @@ public class DicomQrView extends AbstractItemDialogPage implements ImportDicom {
         String url = RsQueryResult.seriesQueryUrl(node.getUrl().toString(), studyUid, null);
         LOGGER.debug(RsQueryResult.QIDO_REQUEST, url);
         return RsQueryResult.parseJSON(
-            url, authMethod, RsQueryResult.jsonQueryParameters(node.getHeaders()));
+            url, authOf(node), RsQueryResult.jsonQueryParameters(node.getHeaders()));
       }
     } catch (Exception e) {
       LOGGER.error("Query the series of study {}", studyUid, e);
@@ -1233,6 +1412,24 @@ public class DicomQrView extends AbstractItemDialogPage implements ImportDicom {
   @Override
   public void importDICOM(DicomModel explorerDcmModel, JProgressBar info) {
     RetrieveSelection selection = getSelection(tree.getCheckboxTree().getCheckingPaths());
+    MultiArchiveSearch search = multiSearch;
+    if (!selection.isEmpty() && search != null) {
+      // Each study is retrieved from the archive that returned it, all archives in parallel
+      search
+          .splitByArchive(selection)
+          .forEach(
+              (archive, part) ->
+                  executor.execute(
+                      new RetrieveTask(
+                          part,
+                          explorerDcmModel,
+                          this,
+                          new RetrieveTask.RetrieveSource(
+                              archive,
+                              findWadoRsNode(archive),
+                              search.getAuthMethod(archive)))));
+      return;
+    }
     if (!selection.isEmpty()) {
       Object selectedItem = getComboDestinationNode().getSelectedItem();
       if (selectedItem instanceof DicomWebNode webNode && webNode.getWebType() == WebType.QIDORS) {
@@ -1248,6 +1445,19 @@ public class DicomQrView extends AbstractItemDialogPage implements ImportDicom {
       }
       executor.execute(new RetrieveTask(selection, explorerDcmModel, this));
     }
+  }
+
+  /** WADO-RS node downloading the images of a QIDO-RS archive, null for a DIMSE archive. */
+  private DicomWebNode findWadoRsNode(AbstractDicomNode archive) {
+    if (archive instanceof DicomWebNode webNode && webNode.getWebType() == WebType.QIDORS) {
+      List<AbstractDicomNode> webNodes =
+          AbstractDicomNode.loadDicomNodes(
+              AbstractDicomNode.Type.WEB, AbstractDicomNode.UsageType.RETRIEVE, WebType.WADORS);
+      String host = RetrieveTask.getHostname(webNode.getUrl().getHost());
+      String m1 = Messages.getString("DicomQrView.no.url.matches.with.the.qido");
+      return RetrieveTask.getWadoUrl(this, host, webNodes, m1);
+    }
+    return null;
   }
 
   public JComboBox<AbstractDicomNode> getComboDestinationNode() {

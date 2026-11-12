@@ -34,6 +34,7 @@ import org.weasis.core.api.media.data.MediaSeriesGroup;
 import org.weasis.core.api.media.data.MediaSeriesGroupNode;
 import org.weasis.core.api.media.data.TagW;
 import org.weasis.core.api.net.URLParameters;
+import org.weasis.core.api.net.auth.AuthMethod;
 import org.weasis.core.ui.tp.raven.spinner.SpinnerProgress;
 import org.weasis.core.util.StringUtil;
 import org.weasis.dicom.codec.DicomSeries;
@@ -69,16 +70,40 @@ public class RetrieveTask extends ExplorerTask<ExplorerTask<Boolean, String>, St
   private final RetrieveSelection selection;
   private final DicomModel explorerDcmModel;
   private final DicomQrView dicomQrView;
+  private final RetrieveSource source;
   protected final PluginOpeningStrategy openingStrategy;
+
+  /**
+   * Archive the selection is retrieved from, with the DICOMweb node downloading the images and the
+   * authentication they need.
+   */
+  public record RetrieveSource(
+      AbstractDicomNode archive, DicomWebNode webRetrieveNode, AuthMethod authMethod) {}
 
   private final AtomicBoolean cancelRequested = new AtomicBoolean();
 
   public RetrieveTask(
       RetrieveSelection selection, DicomModel explorerDcmModel, DicomQrView dicomQrView) {
+    this(
+        selection,
+        explorerDcmModel,
+        dicomQrView,
+        new RetrieveSource(
+            (AbstractDicomNode) dicomQrView.getComboDestinationNode().getSelectedItem(),
+            dicomQrView.getRetrieveNode(),
+            dicomQrView.getAuthMethod()));
+  }
+
+  public RetrieveTask(
+      RetrieveSelection selection,
+      DicomModel explorerDcmModel,
+      DicomQrView dicomQrView,
+      RetrieveSource source) {
     super(AbstractDicomNode.UsageType.RETRIEVE.toString(), false);
     this.selection = selection;
     this.explorerDcmModel = explorerDcmModel;
     this.dicomQrView = dicomQrView;
+    this.source = source;
     this.openingStrategy = new PluginOpeningStrategy(DownloadManager.getOpeningViewer());
   }
 
@@ -90,7 +115,7 @@ public class RetrieveTask extends ExplorerTask<ExplorerTask<Boolean, String>, St
 
     String errorMessage = null;
 
-    Object selectedItem = dicomQrView.getComboDestinationNode().getSelectedItem();
+    AbstractDicomNode selectedItem = source.archive();
     if (selectedItem instanceof final DefaultDicomNode node) {
       DefaultDicomNode callingNode =
           (DefaultDicomNode) dicomQrView.getComboCallingNode().getSelectedItem();
@@ -455,7 +480,10 @@ public class RetrieveTask extends ExplorerTask<ExplorerTask<Boolean, String>, St
     if (dicomModel == null) {
       return;
     }
-    DicomWebNode retrieveNode = dicomQrView.getRetrieveNode();
+    DicomWebNode retrieveNode = source.webRetrieveNode();
+    if (retrieveNode == null) {
+      return;
+    }
 
     String baseUrl = retrieveNode.getUrl().toString();
     Properties props = new Properties();
@@ -489,7 +517,7 @@ public class RetrieveTask extends ExplorerTask<ExplorerTask<Boolean, String>, St
       try {
         LOGGER.debug(RsQueryResult.QIDO_REQUEST, url);
         List<Attributes> series =
-            RsQueryResult.parseJSON(url, dicomQrView.getAuthMethod(), queryParameters);
+            RsQueryResult.parseJSON(url, source.authMethod(), queryParameters);
         for (Attributes seriesDataset : series) {
           if (!selection.contains(
               studyInstanceUID, seriesDataset.getString(Tag.SeriesInstanceUID))) {
@@ -604,7 +632,7 @@ public class RetrieveTask extends ExplorerTask<ExplorerTask<Boolean, String>, St
           new LoadSeries(
               dicomSeries,
               explorerDcmModel,
-              dicomQrView.getAuthMethod(),
+              source.authMethod(),
               getConcurrentDownloadsInSeries(),
               true,
               startDownloading);
