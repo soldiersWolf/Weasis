@@ -23,6 +23,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.EnumSet;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Locale.Category;
@@ -30,6 +31,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Properties;
+import java.util.Set;
 import java.util.StringJoiner;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -39,10 +41,11 @@ import java.util.stream.Stream;
 import javax.swing.ComboBoxModel;
 import javax.swing.DefaultComboBoxModel;
 import javax.swing.JButton;
-import javax.swing.JCheckBox;
+import javax.swing.JCheckBoxMenuItem;
 import javax.swing.JComboBox;
 import javax.swing.JFormattedTextField;
 import javax.swing.JLabel;
+import javax.swing.JMenuItem;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JPopupMenu;
@@ -311,8 +314,11 @@ public class DicomQrView extends AbstractItemDialogPage implements ImportDicom {
   private final JSpinner pageSpinner = new JSpinner();
   private QueryProcess process;
   private AuthMethod authMethod;
-  private static final String LAST_ALL_ARCHIVES = "lastAllArchives";
-  private final JCheckBox allArchives = new JCheckBox(MultiArchiveMessages.getString("all"));
+  private static final String LAST_CHECKED_ARCHIVES = "lastCheckedArchives";
+  private static final String ARCHIVE_SEPARATOR = "";
+  private final JButton archivesButton = new JButton();
+  // Descriptions of the archives ticked for a search on several archives at once
+  private final Set<String> checkedArchives = new LinkedHashSet<>();
   private final JLabel multiStatus = new JLabel();
   // Result of the last query on all archives, null after a query on a single archive
   private volatile MultiArchiveSearch multiSearch;
@@ -401,21 +407,22 @@ public class DicomQrView extends AbstractItemDialogPage implements ImportDicom {
     GuiUtils.setPreferredWidth(comboDestinationNode, 250, 150);
 
     comboDicomRetrieveType.setToolTipText(Messages.getString("DicomQrView.msg_sel_type"));
-    allArchives.setToolTipText(MultiArchiveMessages.getString("all.tip"));
-    allArchives.setSelected(
-        Boolean.parseBoolean(getPersistence().getProperty(LAST_ALL_ARCHIVES, "false")));
-    allArchives.addActionListener(
-        _ -> {
-          getPersistence().setProperty(LAST_ALL_ARCHIVES, String.valueOf(allArchives.isSelected()));
-          applySelectedArchive();
-        });
+    archivesButton.setToolTipText(MultiArchiveMessages.getString("servers.tip"));
+    String saved = getPersistence().getProperty(LAST_CHECKED_ARCHIVES, "");
+    for (String name : saved.split(ARCHIVE_SEPARATOR)) {
+      if (!name.isBlank()) {
+        checkedArchives.add(name);
+      }
+    }
+    archivesButton.addActionListener(_ -> showArchivesMenu());
+    updateArchivesButton();
     multiStatus.setForeground(UIManager.getColor("Component.error.focusedBorderColor"));
     return GuiUtils.getFlowLayoutPanel(
         ITEM_SEPARATOR_SMALL,
         ITEM_SEPARATOR,
         lblDest,
         comboDestinationNode,
-        allArchives,
+        archivesButton,
         multiStatus,
         GuiUtils.boxHorizontalStrut(BLOCK_SEPARATOR),
         lblRetrieve,
@@ -775,8 +782,9 @@ public class DicomQrView extends AbstractItemDialogPage implements ImportDicom {
     AtomicBoolean running = new AtomicBoolean(true);
     multiSearch = null;
     multiStatus.setText(null);
-    if (allArchives.isSelected()) {
-      queryAllArchives(p, fuzzy, running);
+    List<AbstractDicomNode> checked = getCheckedArchives();
+    if (!checked.isEmpty()) {
+      queryArchives(checked, p, fuzzy, running);
       return;
     }
 
@@ -946,11 +954,63 @@ public class DicomQrView extends AbstractItemDialogPage implements ImportDicom {
     return archives;
   }
 
-  /** Queries every configured archive at once and shows the merged result. */
-  private void queryAllArchives(List<DicomParam> p, boolean fuzzy, AtomicBoolean running) {
+  /** Ticked archives that are still configured, in the order of the archive list. */
+  private List<AbstractDicomNode> getCheckedArchives() {
+    return getArchives().stream()
+        .filter(a -> checkedArchives.contains(a.getDescription()))
+        .toList();
+  }
+
+  private void showArchivesMenu() {
+    JPopupMenu menu = new JPopupMenu();
+    for (AbstractDicomNode archive : getArchives()) {
+      JCheckBoxMenuItem item =
+          new JCheckBoxMenuItem(
+              archive.getDescription(), checkedArchives.contains(archive.getDescription()));
+      // Keep the menu open so that several archives can be ticked in a row
+      item.putClientProperty("CheckBoxMenuItem.doNotCloseOnMouseClick", true); // NON-NLS
+      item.addActionListener(
+          _ -> {
+            if (item.isSelected()) {
+              checkedArchives.add(archive.getDescription());
+            } else {
+              checkedArchives.remove(archive.getDescription());
+            }
+            saveCheckedArchives();
+          });
+      menu.add(item);
+    }
+    menu.addSeparator();
+    JMenuItem single = new JMenuItem(MultiArchiveMessages.getString("servers.single"));
+    single.addActionListener(
+        _ -> {
+          checkedArchives.clear();
+          saveCheckedArchives();
+        });
+    menu.add(single);
+    menu.show(archivesButton, 0, archivesButton.getHeight());
+  }
+
+  private void saveCheckedArchives() {
+    getPersistence()
+        .setProperty(LAST_CHECKED_ARCHIVES, String.join(ARCHIVE_SEPARATOR, checkedArchives));
+    applySelectedArchive();
+  }
+
+  private void updateArchivesButton() {
+    int n = getCheckedArchives().size();
+    archivesButton.setText(
+        n == 0
+            ? MultiArchiveMessages.getString("servers")
+            : MultiArchiveMessages.format("servers.n", n));
+  }
+
+  /** Queries the given archives at once and shows the merged result. */
+  private void queryArchives(
+      List<AbstractDicomNode> selected, List<DicomParam> p, boolean fuzzy, AtomicBoolean running) {
     List<AbstractDicomNode> archives = new ArrayList<>();
     Map<AbstractDicomNode, AuthMethod> auths = new HashMap<>();
-    for (AbstractDicomNode archive : getArchives()) {
+    for (AbstractDicomNode archive : selected) {
       if (archive instanceof DicomWebNode web) {
         AuthMethod auth = resolveAuthMethod(web);
         if (auth == null) {
@@ -1143,11 +1203,13 @@ public class DicomQrView extends AbstractItemDialogPage implements ImportDicom {
   }
 
   private void applySelectedArchive() {
+    updateArchivesButton();
     Object selectedItem = comboDestinationNode.getSelectedItem();
-    boolean all = allArchives.isSelected();
+    List<AbstractDicomNode> checked = getCheckedArchives();
+    boolean all = !checked.isEmpty();
     boolean dcmOption =
         all
-            ? getArchives().stream().anyMatch(DefaultDicomNode.class::isInstance)
+            ? checked.stream().anyMatch(DefaultDicomNode.class::isInstance)
             : selectedItem instanceof DefaultDicomNode;
     comboDestinationNode.setEnabled(!all);
     lblCalling.setEnabled(dcmOption);
