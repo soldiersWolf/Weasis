@@ -101,6 +101,8 @@ jobs:
       WEASIS_OUTPUT: "output-dist"
       WEASIS_INPUT_BIN: "native-dist/weasis-native/bin-dist/weasis"
       WEASIS_SCRIPT: "native-dist/weasis-native/build/script"
+      # Forks without Apple certificates build an unsigned (ad-hoc signed) macOS package
+      HAS_MAC_CERT: ${{ secrets.MACOS_CERTIFICATE_DEVELOPMENT != '' && 'true' || 'false' }}
     runs-on: ${{ matrix.os }}
     needs: [setup, build]
     if: ${{ needs.setup.outputs.jpackage_matrix != '[]' }}
@@ -159,7 +161,7 @@ jobs:
 
       - name: Import Developer Certificate
         uses: apple-actions/import-codesign-certs@288b8ec97b82c66b6f2a6baaf7acc8dfbcbe331c  # v7
-        if: matrix.wsystem == 'macosx'
+        if: matrix.wsystem == 'macosx' && env.HAS_MAC_CERT == 'true'
         id: cert
         with:
           p12-file-base64: ${{ secrets.MACOS_CERTIFICATE_DEVELOPMENT }}
@@ -167,7 +169,7 @@ jobs:
 
       - name: Import Installer Certificate
         uses: apple-actions/import-codesign-certs@288b8ec97b82c66b6f2a6baaf7acc8dfbcbe331c  # v7
-        if: matrix.wsystem == 'macosx'
+        if: matrix.wsystem == 'macosx' && env.HAS_MAC_CERT == 'true'
         with:
           create-keychain: "false"
           keychain-password: ${{ steps.cert.outputs.keychain-password }}
@@ -196,7 +198,7 @@ jobs:
           source "${{ env.WEASIS_SCRIPT }}/launch-options.sh" "$machine"
 
           declare -a signArgs=()
-          if [ "$machine" = "macosx" ] ; then
+          if [ "$machine" = "macosx" ] && [ "$HAS_MAC_CERT" = "true" ] ; then
             KEYCHAIN="$HOME/Library/Keychains/signing_temp.keychain-db"
 
             # Enumerate all identities in the keychain for diagnostics.
@@ -252,7 +254,12 @@ jobs:
           --resource-dir "${{ env.RES }}" --app-version "${{ env.WEASIS_CLEAN_VERSION }}" --add-launcher "Dicomizer=${{ env.RES }}/dicomizer-launcher.properties" \
           "${signArgs[@]}" "${customOptions[@]}" "${commonOptions[@]}"
 
-          if [ "$machine" = "macosx" ] ; then
+          if [ "$machine" = "macosx" ] && [ "$HAS_MAC_CERT" != "true" ] ; then
+            # Ad-hoc signature: required to run on Apple silicon, not accepted by Gatekeeper
+            codesign --force --deep --sign - "${{ env.WEASIS_OUTPUT }}/${{ env.NAME }}.app"
+          fi
+
+          if [ "$machine" = "macosx" ] && [ "$HAS_MAC_CERT" = "true" ] ; then
             APP_PATH="${{ env.WEASIS_OUTPUT }}/${{ env.NAME }}.app"
             echo "--- Verifying app bundle signature (deep + strict)"
             codesign --verify --deep --strict --verbose=2 "$APP_PATH"
@@ -329,6 +336,11 @@ jobs:
             # productsign only wraps the outer package; it does not touch the app contents.
             UNSIGNED_PKG="${{ env.WEASIS_OUTPUT }}/${{ env.NAME }}-${{ env.WEASIS_CLEAN_VERSION }}.pkg"
             SIGNED_PKG="final-dist/${{ env.NAME }}-${{ env.WEASIS_CLEAN_VERSION }}-${ARC_NAME}.pkg"
+            if [ "$HAS_MAC_CERT" != "true" ] ; then
+              cp "$UNSIGNED_PKG" "$SIGNED_PKG"
+              echo "APP_ARTIFACT=weasis-${machine}-${ARC_NAME}-${{ env.WEASIS_VERSION }}" >> $GITHUB_ENV
+              exit 0
+            fi
             KEYCHAIN="$HOME/Library/Keychains/signing_temp.keychain-db"
             INSTALLER_ID=$(security find-identity -v -p basic "$KEYCHAIN" \
               | grep "Developer ID Installer" | head -1 | awk -F'"' '{print $2}')
@@ -339,7 +351,7 @@ jobs:
           echo "APP_ARTIFACT=weasis-${machine}-${ARC_NAME}-${{ env.WEASIS_VERSION }}" >> $GITHUB_ENV
 
       - name: Notarize Release Build
-        if: matrix.wsystem == 'macosx'
+        if: matrix.wsystem == 'macosx' && env.HAS_MAC_CERT == 'true'
         shell: bash
         run: |
           SUBMISSION=$(xcrun notarytool submit \
@@ -361,7 +373,7 @@ jobs:
           fi
 
       - name: Staple Release Build
-        if: matrix.wsystem == 'macosx'
+        if: matrix.wsystem == 'macosx' && env.HAS_MAC_CERT == 'true'
         shell: bash
         run: |
           # The ticket is fetched from Apple's CloudKit, which can drop the connection or not
