@@ -20,25 +20,28 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-import java.util.function.Consumer;
+import java.util.function.BiConsumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.weasis.core.api.gui.util.GuiUtils;
 import org.weasis.dicom.explorer.HangingProtocols.OpeningViewer;
 
 /**
- * Keeps the last imported folder in sync with the explorer: its recent files are loaded at start
- * up and new files, also in new sub-folders such as one per day, are loaded as they appear.
+ * Keeps folders in sync with the explorer: the recent files of each watched folder are loaded at
+ * start up and new files, also in new sub-folders such as one per day, are loaded as they appear.
+ * A folder imported alone becomes watched; folders can also be added and removed from the sources
+ * page.
  *
- * <p>The folder is polled rather than watched with a {@code WatchService}, whose events are not
+ * <p>The folders are polled rather than watched with a {@code WatchService}, whose events are not
  * reliable on network shares. Only the sub-folders modified within the time window are listed, so
  * a large archive is not walked on every poll, and a file is loaded once its size and modification
  * time stopped changing, so that a file still being copied is not read.
@@ -46,28 +49,35 @@ import org.weasis.dicom.explorer.HangingProtocols.OpeningViewer;
 public final class FolderWatcher {
   private static final Logger LOGGER = LoggerFactory.getLogger(FolderWatcher.class);
 
-  /** Preference key: keep the last imported folder watched. */
+  /** Preference key: keep the imported folders watched. */
   public static final String P_ENABLED = "weasis.dicom.folder.watch"; // NON-NLS
 
   /** Preference key: how many days back the files are loaded and the sub-folders are listed. */
   public static final String P_DAYS = "weasis.dicom.folder.watch.days"; // NON-NLS
 
-  private static final String P_ROOT = "folder.watch.root"; // NON-NLS
+  private static final String P_ROOTS = "folder.watch.roots"; // NON-NLS
+  private static final String P_LEGACY_ROOT = "folder.watch.root"; // NON-NLS
+  private static final String SEPARATOR = "\u001f";
   private static final long POLL_SECONDS = 20;
 
   private static FolderWatcher instance;
+  private static final List<Runnable> CHANGE_LISTENERS = new CopyOnWriteArrayList<>();
 
-  private final Consumer<List<File>> loader;
+  private final BiConsumer<Path, List<File>> loader;
   private final Duration window;
-  private final Map<Path, FileState> pending = new HashMap<>();
-  private final Set<Path> known = new HashSet<>();
-  private volatile Path root;
+  private final Map<Path, Root> roots = new LinkedHashMap<>();
   private ScheduledExecutorService scheduler;
+
+  /** Files already handed to the loader and files whose copy may still be running. */
+  private static final class Root {
+    final Set<Path> known = new HashSet<>();
+    final Map<Path, FileState> pending = new HashMap<>();
+  }
 
   /** Size and modification time seen at the previous poll, to tell when a copy is finished. */
   private record FileState(long size, long modified) {}
 
-  FolderWatcher(Consumer<List<File>> loader, Duration window) {
+  FolderWatcher(BiConsumer<Path, List<File>> loader, Duration window) {
     this.loader = loader;
     this.window = window;
   }
@@ -76,7 +86,7 @@ public final class FolderWatcher {
     return GuiUtils.getUICore().getSystemPreferences().getBooleanProperty(P_ENABLED, false);
   }
 
-  /** Starts watching the remembered folder, loading its recent files into the model. */
+  /** Starts watching the remembered folders, loading their recent files into the model. */
   public static synchronized void start(DicomModel model) {
     if (instance != null || !isEnabled()) {
       return;
@@ -84,61 +94,126 @@ public final class FolderWatcher {
     int days = GuiUtils.getUICore().getSystemPreferences().getIntProperty(P_DAYS, 7);
     instance =
         new FolderWatcher(
-            files ->
+            (root, files) ->
                 DicomModel.LOADING_EXECUTOR.execute(
                     new LoadLocalDicom(files.toArray(File[]::new), false, model, OpeningViewer.NONE)
-                        .withSourceLabel(sourceName())),
+                        .withSourceLabel(labelOf(root))),
             Duration.ofDays(Math.max(1, days)));
     instance.startPolling();
-    String saved = LocalPersistence.getProperties().getProperty(P_ROOT);
-    if (saved != null && !saved.isBlank()) {
-      // Listing a network share can be slow: never on the event dispatch thread
-      FolderWatcher watcher = instance;
-      watcher.scheduler.execute(() -> watcher.setRoot(Path.of(saved), true));
+    List<Path> saved = savedFolders();
+    FolderWatcher watcher = instance;
+    // Listing a network share can be slow: never on the event dispatch thread
+    watcher.scheduler.execute(() -> saved.forEach(f -> watcher.addRoot(f, true)));
+  }
+
+  private static List<Path> savedFolders() {
+    var props = LocalPersistence.getProperties();
+    String value = props.getProperty(P_ROOTS);
+    if (value == null) {
+      value = props.getProperty(P_LEGACY_ROOT, "");
     }
+    List<Path> folders = new ArrayList<>();
+    for (String s : value.split(SEPARATOR)) {
+      if (!s.isBlank()) {
+        folders.add(Path.of(s));
+      }
+    }
+    return folders;
+  }
+
+  private static void saveFolders(List<Path> folders) {
+    LocalPersistence.getProperties()
+        .setProperty(
+            P_ROOTS, String.join(SEPARATOR, folders.stream().map(Path::toString).toList()));
+    CHANGE_LISTENERS.forEach(Runnable::run);
   }
 
   /**
-   * Makes the folder the watched one after the user imported it. Its current files are being
-   * loaded by that import, so only the files added afterwards are loaded by the watcher.
+   * Watches a folder the user imported. Its current files are being loaded by that import, so only
+   * the files added afterwards are loaded by the watcher.
    */
-  public static synchronized void watchImported(File folder) {
-    if (instance != null && folder != null && folder.isDirectory()) {
-      Path path = folder.toPath().toAbsolutePath().normalize();
-      LocalPersistence.getProperties().setProperty(P_ROOT, path.toString());
-      FolderWatcher watcher = instance;
-      watcher.scheduler.execute(() -> watcher.setRoot(path, false));
-    }
+  public static void watchImported(File folder) {
+    watch(folder, false);
   }
 
-  private static String sourceName() {
-    return getWatchedFolder().map(p -> p.getFileName()).map(Object::toString).orElse(null);
+  /** Watches a folder added on the sources page and loads its recent files. */
+  public static void addFolder(File folder) {
+    watch(folder, true);
   }
 
-  /** The watched folder, empty when none. */
-  public static Optional<Path> getWatchedFolder() {
-    FolderWatcher watcher = instance;
-    return watcher == null ? Optional.empty() : Optional.ofNullable(watcher.root);
-  }
-
-  synchronized void setRoot(Path folder, boolean loadRecent) {
-    if (folder.equals(root)) {
+  private static synchronized void watch(File folder, boolean loadRecent) {
+    if (instance == null || folder == null || !folder.isDirectory()) {
       return;
     }
-    root = folder;
-    known.clear();
-    pending.clear();
+    Path path = folder.toPath().toAbsolutePath().normalize();
+    List<Path> folders = getWatchedFolders();
+    if (!folders.contains(path)) {
+      List<Path> updated = new ArrayList<>(folders);
+      updated.add(path);
+      saveFolders(updated);
+    }
+    FolderWatcher watcher = instance;
+    watcher.scheduler.execute(() -> watcher.addRoot(path, loadRecent));
+  }
+
+  /** Stops watching a folder; the studies already loaded stay in the explorer. */
+  public static synchronized void removeFolder(Path folder) {
+    if (instance == null) {
+      return;
+    }
+    List<Path> updated = new ArrayList<>(getWatchedFolders());
+    if (updated.remove(folder)) {
+      saveFolders(updated);
+    }
+    FolderWatcher watcher = instance;
+    watcher.scheduler.execute(() -> watcher.removeRoot(folder));
+  }
+
+  /** Loads at once the files that appeared in the watched folders. */
+  public static void pollNow() {
+    FolderWatcher watcher = instance;
+    if (watcher != null) {
+      watcher.scheduler.execute(watcher::pollSafely);
+    }
+  }
+
+  /** The watched folders, in the order they were added. */
+  public static List<Path> getWatchedFolders() {
+    return instance == null ? List.of() : savedFolders();
+  }
+
+  /** Runs the listener on the calling thread whenever the watched folders change. */
+  public static void addChangeListener(Runnable listener) {
+    CHANGE_LISTENERS.add(listener);
+  }
+
+  /** Name shown as the source of the studies loaded from the folder. */
+  public static String labelOf(Path folder) {
+    Path name = folder.getFileName();
+    return name == null ? folder.toString() : name.toString();
+  }
+
+  synchronized void addRoot(Path folder, boolean loadRecent) {
+    if (roots.containsKey(folder)) {
+      return;
+    }
+    Root root = new Root();
+    roots.put(folder, root);
     List<Path> recent = new ArrayList<>();
     for (Path file : listFiles(folder)) {
-      known.add(file);
+      root.known.add(file);
       if (loadRecent && isRecent(file)) {
         recent.add(file);
       }
     }
     if (!recent.isEmpty()) {
       LOGGER.info("Loading {} recent files of {}", recent.size(), folder);
-      loader.accept(recent.stream().map(Path::toFile).toList());
+      loader.accept(folder, recent.stream().map(Path::toFile).toList());
     }
+  }
+
+  synchronized void removeRoot(Path folder) {
+    roots.remove(folder);
   }
 
   private void startPolling() {
@@ -157,35 +232,42 @@ public final class FolderWatcher {
     try {
       poll();
     } catch (RuntimeException e) {
-      LOGGER.error("Polling the watched folder", e);
+      LOGGER.error("Polling the watched folders", e);
     }
   }
 
   /** Loads the new files whose copy is finished; returns how many were handed to the loader. */
   synchronized int poll() {
-    Path folder = root;
-    if (folder == null || !Files.isDirectory(folder)) {
+    int total = 0;
+    for (Map.Entry<Path, Root> entry : roots.entrySet()) {
+      total += poll(entry.getKey(), entry.getValue());
+    }
+    return total;
+  }
+
+  private int poll(Path folder, Root root) {
+    if (!Files.isDirectory(folder)) {
       return 0; // Unmounted share: keep the state and try again at the next poll
     }
     List<File> ready = new ArrayList<>();
     for (Path file : listFiles(folder)) {
-      if (known.contains(file)) {
+      if (root.known.contains(file)) {
         continue;
       }
       FileState now = state(file);
       if (now == null) {
         continue;
       }
-      FileState before = pending.put(file, now);
+      FileState before = root.pending.put(file, now);
       if (now.equals(before)) {
-        pending.remove(file);
-        known.add(file);
+        root.pending.remove(file);
+        root.known.add(file);
         ready.add(file.toFile());
       }
     }
     if (!ready.isEmpty()) {
       LOGGER.info("Loading {} new files of {}", ready.size(), folder);
-      loader.accept(ready);
+      loader.accept(folder, ready);
     }
     return ready.size();
   }
@@ -211,8 +293,7 @@ public final class FolderWatcher {
   /** Files of the folder and of its sub-folders modified within the window. */
   private List<Path> listFiles(Path folder) {
     List<Path> files = new ArrayList<>();
-    long cutoff = cutoff().toEpochMilli();
-    collect(folder, cutoff, files, true);
+    collect(folder, cutoff().toEpochMilli(), files, true);
     return files;
   }
 

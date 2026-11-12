@@ -32,7 +32,8 @@ class FolderWatcherTest {
   private final List<String> loaded = new ArrayList<>();
   private final FolderWatcher watcher =
       new FolderWatcher(
-          files -> files.stream().map(File::getName).forEach(loaded::add), Duration.ofDays(7));
+          (_, files) -> files.stream().map(File::getName).forEach(loaded::add),
+          Duration.ofDays(7));
 
   private Path write(String relative, String content) throws IOException {
     Path file = root.resolve(relative);
@@ -52,14 +53,14 @@ class FolderWatcherTest {
     age(old, Duration.ofDays(300));
     age(old.getParent(), Duration.ofDays(300));
 
-    watcher.setRoot(root, true);
+    watcher.addRoot(root, true);
 
     assertEquals(List.of("a.dcm"), loaded);
   }
 
   @Test
   void loadsANewFileOnceItsCopyIsFinished() throws IOException {
-    watcher.setRoot(root, false);
+    watcher.addRoot(root, false);
     Path file = write("12-Nov-2026/new.dcm", "part");
 
     assertEquals(0, watcher.poll(), "First sight: the copy may still be running");
@@ -74,7 +75,7 @@ class FolderWatcherTest {
   void doesNotReloadTheFilesOfAnImportedFolder() throws IOException {
     write("11-Nov-2026/imported.dcm", "x");
 
-    watcher.setRoot(root, false);
+    watcher.addRoot(root, false);
     watcher.poll();
     watcher.poll();
 
@@ -83,13 +84,40 @@ class FolderWatcherTest {
 
   @Test
   void picksUpANewDayFolder() throws IOException {
-    watcher.setRoot(root, false);
+    watcher.addRoot(root, false);
     write("13-Nov-2026/morning.dcm", "m");
 
     watcher.poll();
     watcher.poll();
 
     assertEquals(List.of("morning.dcm"), loaded);
+  }
+
+  @Test
+  void watchesSeveralFoldersAtOnce() throws IOException {
+    Path first = Files.createDirectories(root.resolve("ProScan"));
+    Path second = Files.createDirectories(root.resolve("Other"));
+    watcher.addRoot(first, false);
+    watcher.addRoot(second, false);
+    Files.writeString(first.resolve("a.dcm"), "a");
+    Files.writeString(second.resolve("b.dcm"), "b");
+
+    watcher.poll();
+    watcher.poll();
+
+    assertEquals(List.of("a.dcm", "b.dcm"), loaded.stream().sorted().toList());
+  }
+
+  @Test
+  void stopsLoadingFromARemovedFolder() throws IOException {
+    watcher.addRoot(root, false);
+    watcher.removeRoot(root);
+    write("late.dcm", "x");
+
+    watcher.poll();
+    watcher.poll();
+
+    assertTrue(loaded.isEmpty());
   }
 
   @Test

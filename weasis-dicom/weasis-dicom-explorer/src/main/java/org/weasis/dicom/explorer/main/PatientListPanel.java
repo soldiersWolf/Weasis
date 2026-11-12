@@ -19,6 +19,7 @@ import java.awt.event.ActionEvent;
 import java.awt.event.KeyEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.nio.file.Path;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
@@ -191,6 +192,7 @@ public class PatientListPanel extends JPanel
     add(watched, "newline, growx, hidemode 3"); // NON-NLS
 
     refreshLater.setRepeats(false);
+    FolderWatcher.addChangeListener(() -> GuiExecutor.execute(refreshLater::restart));
     source.addListDataListener(new RefreshOnChange());
     explorer
         .getDataExplorerModel()
@@ -389,13 +391,17 @@ public class PatientListPanel extends JPanel
         visits.size() == total
             ? PatientListMessages.format("count.all", total)
             : PatientListMessages.format("count", visits.size(), total));
-    Optional<String> folder = FolderWatcher.getWatchedFolder().map(Object::toString);
-    watched.setVisible(folder.isPresent());
-    folder.ifPresent(
-        f -> {
-          watched.setText(PatientListMessages.format("watching", f));
-          watched.setToolTipText(f);
-        });
+    List<Path> folders = FolderWatcher.getWatchedFolders();
+    watched.setVisible(!folders.isEmpty());
+    if (!folders.isEmpty()) {
+      watched.setText(
+          PatientListMessages.format(
+              "watching",
+              String.join(", ", folders.stream().map(FolderWatcher::labelOf).toList())));
+      watched.setToolTipText(
+          String.join("
+", folders.stream().map(Path::toString).toList()));
+    }
   }
 
   /** Lists the sources in the filter, which is shown only when there is more than one. */
