@@ -10,7 +10,10 @@
 package org.weasis.dicom.qr;
 
 import com.formdev.flatlaf.FlatClientProperties;
+import java.awt.Color;
 import java.awt.Component;
+import java.awt.Dimension;
+import java.awt.Rectangle;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.time.LocalDate;
@@ -18,6 +21,7 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.FormatStyle;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
@@ -43,17 +47,21 @@ import javax.swing.JPopupMenu;
 import javax.swing.JProgressBar;
 import javax.swing.JRadioButtonMenuItem;
 import javax.swing.JScrollPane;
+import javax.swing.JSplitPane;
 import javax.swing.JTable;
 import javax.swing.JTextField;
 import javax.swing.JToggleButton;
 import javax.swing.ListSelectionModel;
 import javax.swing.RowFilter;
+import javax.swing.Scrollable;
 import javax.swing.SwingUtilities;
+import javax.swing.UIManager;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
 import javax.swing.table.AbstractTableModel;
 import javax.swing.table.TableRowSorter;
 import net.miginfocom.swing.MigLayout;
+import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.Tag;
 import org.dcm4che3.net.service.QueryRetrieveLevel;
 import org.slf4j.Logger;
@@ -64,6 +72,7 @@ import org.weasis.core.api.gui.util.GuiUtils;
 import org.weasis.core.api.media.data.MediaSeriesGroup;
 import org.weasis.core.api.media.data.MediaSeriesGroupNode;
 import org.weasis.core.api.net.auth.AuthMethod;
+import org.weasis.core.api.net.auth.OAuth2ServiceFactory;
 import org.weasis.core.api.service.WProperties;
 import org.weasis.core.ui.pref.PreferenceDialog;
 import org.weasis.core.ui.tp.raven.datetime.DatePicker;
@@ -74,11 +83,14 @@ import org.weasis.dicom.explorer.imp.ImportDicom;
 import org.weasis.dicom.explorer.pref.node.AbstractDicomNode;
 import org.weasis.dicom.explorer.pref.node.AbstractDicomNode.RetrieveType;
 import org.weasis.dicom.explorer.pref.node.AbstractDicomNode.UsageType;
+import org.weasis.dicom.explorer.pref.node.AuthenticationPersistence;
 import org.weasis.dicom.explorer.pref.node.DefaultDicomNode;
 import org.weasis.dicom.explorer.pref.node.DicomWebNode;
 import org.weasis.dicom.explorer.rs.RsQueryParams;
+import org.weasis.dicom.explorer.rs.RsQueryResult;
 import org.weasis.dicom.op.CFind;
 import org.weasis.dicom.param.DicomParam;
+import org.weasis.dicom.param.DicomState;
 import org.weasis.dicom.tool.DicomListener;
 
 /**
@@ -86,7 +98,8 @@ import org.weasis.dicom.tool.DicomListener;
  * sortable result table. More criteria and the technical settings are one click away but hidden by
  * default. Each study is retrieved from the archive that returned it.
  */
-public class ServerDownloadView extends AbstractItemDialogPage implements ImportDicom {
+public class ServerDownloadView extends AbstractItemDialogPage
+    implements ImportDicom, Scrollable {
   private static final Logger LOGGER = LoggerFactory.getLogger(ServerDownloadView.class);
 
   private static final String P_ARCHIVES = "download.archives"; // NON-NLS
@@ -119,10 +132,14 @@ public class ServerDownloadView extends AbstractItemDialogPage implements Import
   private final DatePicker toPicker = buildDatePicker();
   private final JPanel datesPanel = new JPanel(new MigLayout("ins 0", "[][]8[][]")); // NON-NLS
 
-  private final JPanel archivesPanel = new JPanel(new MigLayout("ins 0, gap 12")); // NON-NLS
+  private final JPanel archivesPanel = new JPanel(new MigLayout("ins 0, gap 4")); // NON-NLS
   private final Set<String> checkedArchives = new LinkedHashSet<>();
+  private final Map<String, JLabel> archiveStatus = new HashMap<>();
+  private final JButton checkConnection = new JButton(DownloadMessages.getString("check"));
 
   private final StudyTableModel studies = new StudyTableModel();
+  private final SeriesTableModel series = new SeriesTableModel();
+  private final JTable seriesTable = new JTable(series);
   private final JTable studyTable = new JTable(studies);
   private final TableRowSorter<StudyTableModel> sorter = new TableRowSorter<>(studies);
   private final JTextField resultFilter = new JTextField();
@@ -143,6 +160,33 @@ public class ServerDownloadView extends AbstractItemDialogPage implements Import
     add(buildResultBox(), "grow, push, wrap"); // NON-NLS
     add(buildStatusBar(), "growx"); // NON-NLS
     restoreState();
+  }
+
+  // The import dialog shows its pages in a scroll pane: fill it instead of keeping the
+  // preferred size, so that the result table grows with the dialog
+  @Override
+  public Dimension getPreferredScrollableViewportSize() {
+    return getPreferredSize();
+  }
+
+  @Override
+  public int getScrollableUnitIncrement(Rectangle visible, int orientation, int direction) {
+    return 16;
+  }
+
+  @Override
+  public int getScrollableBlockIncrement(Rectangle visible, int orientation, int direction) {
+    return visible.height;
+  }
+
+  @Override
+  public boolean getScrollableTracksViewportWidth() {
+    return true;
+  }
+
+  @Override
+  public boolean getScrollableTracksViewportHeight() {
+    return true;
   }
 
   // ---------------------------------------------------------------- search box
@@ -168,8 +212,12 @@ public class ServerDownloadView extends AbstractItemDialogPage implements Import
     box.add(new JLabel(DownloadMessages.getString("when")));
     box.add(buildPeriodRow(), "growx"); // NON-NLS
 
+    checkConnection.putClientProperty(
+        FlatClientProperties.BUTTON_TYPE, FlatClientProperties.BUTTON_TYPE_BORDERLESS);
+    checkConnection.addActionListener(_ -> checkConnections(true));
     box.add(new JLabel(DownloadMessages.getString("where")));
-    box.add(archivesPanel, "growx"); // NON-NLS
+    box.add(archivesPanel, "growx, split 2"); // NON-NLS
+    box.add(checkConnection, "gapleft push"); // NON-NLS
 
     moreToggle.putClientProperty(
         FlatClientProperties.BUTTON_TYPE, FlatClientProperties.BUTTON_TYPE_BORDERLESS);
@@ -265,6 +313,7 @@ public class ServerDownloadView extends AbstractItemDialogPage implements Import
       checkedArchives.add(nodes.getFirst().getDescription());
     }
     archivesPanel.removeAll();
+    archiveStatus.clear();
     for (AbstractDicomNode node : nodes) {
       JCheckBox box =
           new JCheckBox(node.getDescription(), checkedArchives.contains(node.getDescription()));
@@ -279,6 +328,11 @@ public class ServerDownloadView extends AbstractItemDialogPage implements Import
             prefs().setProperty(P_ARCHIVES, String.join(SEPARATOR, checkedArchives));
           });
       archivesPanel.add(box);
+      JLabel dot = new JLabel("\u25CF"); // NON-NLS
+      dot.setForeground(UIManager.getColor("Label.disabledForeground"));
+      dot.setToolTipText(DownloadMessages.getString("check.unknown"));
+      archiveStatus.put(node.getDescription(), dot);
+      archivesPanel.add(dot, "gapright 12"); // NON-NLS
     }
     if (nodes.isEmpty()) {
       JButton add = new JButton(DownloadMessages.getString("archives.add"));
@@ -294,6 +348,80 @@ public class ServerDownloadView extends AbstractItemDialogPage implements Import
       return d.getDicomNode().getHostname() + ":" + d.getDicomNode().getPort();
     }
     return node instanceof DicomWebNode w ? String.valueOf(w.getUrl()) : "";
+  }
+
+  /**
+   * Checks every configured archive and paints its dot green or red, with the reason. A check that
+   * is not interactive skips the archives needing a sign-in, so that opening the window never
+   * asks for one.
+   */
+  private void checkConnections(boolean interactive) {
+    List<AbstractDicomNode> nodes = ServerWatcher.configuredArchives();
+    if (nodes.isEmpty()) {
+      return;
+    }
+    checkConnection.setEnabled(false);
+    archiveStatus
+        .values()
+        .forEach(
+            dot -> {
+              dot.setForeground(UIManager.getColor("Label.disabledForeground"));
+              dot.setToolTipText(DownloadMessages.getString("check.running"));
+            });
+    Map<AbstractDicomNode, AuthMethod> auths = new HashMap<>();
+    for (AbstractDicomNode node : nodes) {
+      if (node instanceof DicomWebNode web) {
+        AuthMethod auth = AuthenticationPersistence.getAuthMethod(web.getAuthMethodUid());
+        if (interactive || OAuth2ServiceFactory.NO_AUTH.equals(auth)) {
+          auth = DicomQrView.resolveAuthMethod(web);
+          if (auth != null) {
+            auths.put(web, auth);
+          }
+        }
+      }
+    }
+    DefaultDicomNode calling = callingNode();
+    executor.execute(
+        () -> {
+          int failed = 0;
+          for (AbstractDicomNode node : nodes) {
+            if (node instanceof DicomWebNode && !auths.containsKey(node)) {
+              continue; // Needs a sign-in: checked only when asked
+            }
+            ConnectionCheck.Result result = ConnectionCheck.check(node, calling, auths.get(node));
+            if (!result.ok()) {
+              failed++;
+            }
+            GuiExecutor.execute(() -> showConnection(node, result));
+          }
+          int bad = failed;
+          GuiExecutor.execute(
+              () -> {
+                checkConnection.setEnabled(true);
+                status.setText(
+                    bad == 0
+                        ? DownloadMessages.getString("check.allok")
+                        : DownloadMessages.format("check.failed", bad));
+              });
+        });
+  }
+
+  private void showConnection(AbstractDicomNode node, ConnectionCheck.Result result) {
+    JLabel dot = archiveStatus.get(node.getDescription());
+    if (dot == null) {
+      return;
+    }
+    if (result.ok()) {
+      dot.setForeground(new Color(0x2E9E44));
+      dot.setToolTipText(DownloadMessages.format("check.ok", result.millis()));
+    } else if (result.hint() != null) {
+      dot.setForeground(new Color(0xE0A100));
+      dot.setToolTipText(DownloadMessages.format("check.hint", result.hint()));
+    } else {
+      Color error = UIManager.getColor("Component.error.focusedBorderColor");
+      dot.setForeground(error != null ? error : Color.RED);
+      dot.setToolTipText(DownloadMessages.format("check.error", result.message()));
+    }
   }
 
   private List<AbstractDicomNode> checkedArchives() {
@@ -314,12 +442,8 @@ public class ServerDownloadView extends AbstractItemDialogPage implements Import
         .addListSelectionListener(
             e -> {
               if (!e.getValueIsAdjusting()) {
-                int n = studyTable.getSelectedRowCount();
-                download.setEnabled(n > 0);
-                download.setText(
-                    n > 1
-                        ? DownloadMessages.format("download.n", n)
-                        : DownloadMessages.getString("download"));
+                loadSeriesOfSelection();
+                updateDownloadButton();
               }
             });
     studyTable.addMouseListener(
@@ -337,10 +461,30 @@ public class ServerDownloadView extends AbstractItemDialogPage implements Import
     resultFilter.putClientProperty(FlatClientProperties.TEXT_FIELD_SHOW_CLEAR_BUTTON, true);
     resultFilter.getDocument().addDocumentListener(new DocumentAdapter(this::applyResultFilter));
 
+    seriesTable.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
+    seriesTable.setFillsViewportHeight(true);
+    seriesTable.setRowHeight(studyTable.getRowHeight());
+    seriesTable
+        .getSelectionModel()
+        .addListSelectionListener(
+            e -> {
+              if (!e.getValueIsAdjusting()) {
+                updateDownloadButton();
+              }
+            });
+    JScrollPane seriesScroll = new JScrollPane(seriesTable);
+    seriesScroll.setBorder(
+        BorderFactory.createTitledBorder(DownloadMessages.getString("series.title")));
+    JSplitPane split =
+        new JSplitPane(JSplitPane.VERTICAL_SPLIT, new JScrollPane(studyTable), seriesScroll);
+    split.setResizeWeight(0.7);
+    split.setContinuousLayout(true);
+    split.setBorder(null);
+
     JPanel box =
         new JPanel(new MigLayout("ins 0, fill, wrap 1", "[grow,fill]", "[][grow,fill]")); // NON-NLS
     box.add(resultFilter, "growx"); // NON-NLS
-    box.add(new JScrollPane(studyTable), "grow, height 180lp:300lp:"); // NON-NLS
+    box.add(split, "grow, height 220lp:360lp:"); // NON-NLS
     return box;
   }
 
@@ -350,10 +494,16 @@ public class ServerDownloadView extends AbstractItemDialogPage implements Import
     download.setEnabled(false);
     download.putClientProperty(FlatClientProperties.STYLE, "font: +1 bold"); // NON-NLS
     download.addActionListener(_ -> downloadSelection());
-    JPanel bar = new JPanel(new MigLayout("ins 0, fillx", "[grow,fill][]8[]")); // NON-NLS
+    JLabel storage = new JLabel(DownloadMessages.getString("storage"));
+    storage.setToolTipText(DownloadMessages.getString("storage.tip"));
+    storage.setForeground(UIManager.getColor("Label.disabledForeground"));
+    storage.putClientProperty(FlatClientProperties.STYLE_CLASS, "small"); // NON-NLS
+    JPanel bar =
+        new JPanel(new MigLayout("ins 0, fillx, wrap 3", "[grow,fill][]8[]")); // NON-NLS
     bar.add(status, "growx"); // NON-NLS
     bar.add(progress, "width 80lp!, hidemode 3"); // NON-NLS
     bar.add(download);
+    bar.add(storage, "span 3"); // NON-NLS
     return bar;
   }
 
@@ -376,6 +526,8 @@ public class ServerDownloadView extends AbstractItemDialogPage implements Import
     datesPanel.setVisible(period == StudyPeriod.DATE_RANGE);
     reloadArchives();
     status.setText(DownloadMessages.getString("status.ready"));
+    // Show at once which archive answers, as the dots of the archive row
+    SwingUtilities.invokeLater(() -> checkConnections(false));
   }
 
   private StudyPeriod selectedPeriod() {
@@ -561,6 +713,7 @@ public class ServerDownloadView extends AbstractItemDialogPage implements Import
     status.setText(DownloadMessages.getString("status.searching"));
     progress.setVisible(true);
     studies.setRows(List.of());
+    series.setRows(List.of());
     executor.execute(
         () -> {
           MultiArchiveSearch search = new MultiArchiveSearch(auths);
@@ -648,6 +801,92 @@ public class ServerDownloadView extends AbstractItemDialogPage implements Import
         text.isEmpty() ? null : RowFilter.regexFilter("(?iu)" + Pattern.quote(text))); // NON-NLS
   }
 
+  // ---------------------------------------------------------------- series
+
+  private void updateDownloadButton() {
+    int studiesSelected = studyTable.getSelectedRowCount();
+    int seriesSelected = seriesTable.getSelectedRowCount();
+    download.setEnabled(studiesSelected > 0);
+    if (studiesSelected == 1 && seriesSelected > 0) {
+      download.setText(DownloadMessages.format("download.series", seriesSelected));
+    } else if (studiesSelected > 1) {
+      download.setText(DownloadMessages.format("download.n", studiesSelected));
+    } else {
+      download.setText(DownloadMessages.getString("download"));
+    }
+  }
+
+  /** Lists the series of the selected study; nothing when several studies are selected. */
+  private void loadSeriesOfSelection() {
+    series.setRows(List.of());
+    List<StudyRow> selected = selectedStudies();
+    MultiArchiveSearch search = lastSearch;
+    if (selected.size() != 1 || selected.getFirst().archive() == null || search == null) {
+      return;
+    }
+    StudyRow study = selected.getFirst();
+    executor.execute(
+        () -> {
+          List<SeriesRow> rows = new ArrayList<>();
+          for (Attributes a : querySeries(study, search)) {
+            rows.add(
+                new SeriesRow(
+                    study.uid(),
+                    a.getString(Tag.SeriesInstanceUID),
+                    a.getString(Tag.SeriesNumber, ""),
+                    a.getString(Tag.Modality, ""),
+                    a.getString(Tag.SeriesDescription, ""),
+                    a.getString(Tag.NumberOfSeriesRelatedInstances, "")));
+          }
+          rows.sort(Comparator.comparing(SeriesRow::sortNumber));
+          GuiExecutor.execute(
+              () -> {
+                List<StudyRow> now = selectedStudies();
+                if (now.size() == 1 && now.getFirst() == study) {
+                  series.setRows(rows);
+                }
+              });
+        });
+  }
+
+  private static List<Attributes> querySeries(StudyRow study, MultiArchiveSearch search) {
+    try {
+      if (study.archive() instanceof DefaultDicomNode node) {
+        DefaultDicomNode calling = callingNode();
+        if (calling == null) {
+          return List.of();
+        }
+        DicomParam[] keys = {
+          new DicomParam(Tag.StudyInstanceUID, study.uid()),
+          CFind.SeriesInstanceUID,
+          CFind.Modality,
+          CFind.SeriesNumber,
+          CFind.SeriesDescription,
+          new DicomParam(Tag.NumberOfSeriesRelatedInstances)
+        };
+        DicomState state =
+            CFind.process(
+                DicomQrView.buildFindParams(false),
+                calling.getDicomNodeWithOnlyAET(),
+                node.getDicomNode(),
+                0,
+                QueryRetrieveLevel.SERIES,
+                keys);
+        return state.getDicomRSP() == null ? List.of() : state.getDicomRSP();
+      }
+      if (study.archive() instanceof DicomWebNode node) {
+        String url = RsQueryResult.seriesQueryUrl(node.getUrl().toString(), study.uid(), null);
+        return RsQueryResult.parseJSON(
+            url,
+            search.getAuthMethod(node),
+            RsQueryResult.jsonQueryParameters(node.getHeaders()));
+      }
+    } catch (Exception e) {
+      LOGGER.error("Query the series of study {}", study.uid(), e);
+    }
+    return List.of();
+  }
+
   // ---------------------------------------------------------------- download
 
   private List<StudyRow> selectedStudies() {
@@ -666,7 +905,16 @@ public class ServerDownloadView extends AbstractItemDialogPage implements Import
       return;
     }
     RetrieveSelection selection = new RetrieveSelection();
-    selected.forEach(r -> selection.addStudy(r.uid()));
+    int[] seriesRows = seriesTable.getSelectedRows();
+    if (selected.size() == 1 && seriesRows.length > 0) {
+      // Only the series picked below the study
+      for (int row : seriesRows) {
+        SeriesRow s = series.row(row);
+        selection.addSeries(s.studyUid(), s.seriesUid());
+      }
+    } else {
+      selected.forEach(r -> selection.addStudy(r.uid()));
+    }
     RetrieveHost host = new Host(search.getModel(), this);
     search
         .splitByArchive(selection)
@@ -758,6 +1006,65 @@ public class ServerDownloadView extends AbstractItemDialogPage implements Import
       String uid,
       LocalDateTime when,
       AbstractDicomNode archive) {}
+
+  /** One series of the selected study. */
+  record SeriesRow(
+      String studyUid,
+      String seriesUid,
+      String number,
+      String modality,
+      String description,
+      String images) {
+    int sortNumber() {
+      try {
+        return Integer.parseInt(number.strip());
+      } catch (NumberFormatException e) {
+        return Integer.MAX_VALUE;
+      }
+    }
+  }
+
+  private static final class SeriesTableModel extends AbstractTableModel {
+    private static final String[] COLUMNS = {
+      "col.number", "col.modality", "col.description", "col.images" // NON-NLS
+    };
+    private List<SeriesRow> rows = List.of();
+
+    void setRows(List<SeriesRow> rows) {
+      this.rows = List.copyOf(rows);
+      fireTableDataChanged();
+    }
+
+    SeriesRow row(int index) {
+      return rows.get(index);
+    }
+
+    @Override
+    public int getRowCount() {
+      return rows.size();
+    }
+
+    @Override
+    public int getColumnCount() {
+      return COLUMNS.length;
+    }
+
+    @Override
+    public String getColumnName(int column) {
+      return DownloadMessages.getString(COLUMNS[column]);
+    }
+
+    @Override
+    public Object getValueAt(int rowIndex, int column) {
+      SeriesRow r = rows.get(rowIndex);
+      return switch (column) {
+        case 0 -> r.number();
+        case 1 -> r.modality();
+        case 2 -> r.description();
+        default -> r.images();
+      };
+    }
+  }
 
   private static String text(MediaSeriesGroup group, int tag) {
     Object value = group.getTagValue(TagD.get(tag));

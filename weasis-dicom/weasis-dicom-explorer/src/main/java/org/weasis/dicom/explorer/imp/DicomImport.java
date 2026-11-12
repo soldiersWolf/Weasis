@@ -40,7 +40,8 @@ public class DicomImport extends AbstractWizardDialog {
         parent,
         Messages.getString("DicomImport.imp_dicom"),
         ModalityType.APPLICATION_MODAL,
-        new Dimension(650, 500));
+        // Large enough for the download window and its result table
+        new Dimension(980, 680));
     this.dicomModel = dicomModel;
 
     JButton importAndClose = new JButton(Messages.getString("DicomImport.impAndClose0"));
