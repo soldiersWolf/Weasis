@@ -1401,7 +1401,8 @@ public class DicomQrView extends AbstractItemDialogPage implements ImportDicom, 
         return findSeries(node, studyUid);
       }
       if (selectedItem instanceof DicomWebNode node) {
-        String url = RsQueryResult.seriesQueryUrl(node.getUrl().toString(), studyUid, null);
+        String url =
+            RsQueryResult.seriesQueryUrl(RetrieveTask.dicomWebRoot(node), studyUid, null);
         LOGGER.debug(RsQueryResult.QIDO_REQUEST, url);
         return RsQueryResult.parseJSON(
             url, authOf(node), RsQueryResult.jsonQueryParameters(node.getHeaders()));

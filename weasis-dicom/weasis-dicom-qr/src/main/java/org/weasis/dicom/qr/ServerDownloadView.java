@@ -875,7 +875,8 @@ public class ServerDownloadView extends AbstractItemDialogPage
         return state.getDicomRSP() == null ? List.of() : state.getDicomRSP();
       }
       if (study.archive() instanceof DicomWebNode node) {
-        String url = RsQueryResult.seriesQueryUrl(node.getUrl().toString(), study.uid(), null);
+        String url =
+            RsQueryResult.seriesQueryUrl(RetrieveTask.dicomWebRoot(node), study.uid(), null);
         return RsQueryResult.parseJSON(
             url,
             search.getAuthMethod(node),

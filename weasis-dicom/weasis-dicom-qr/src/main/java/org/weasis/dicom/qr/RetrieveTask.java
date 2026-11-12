@@ -475,6 +475,36 @@ public class RetrieveTask extends ExplorerTask<ExplorerTask<Boolean, String>, St
     return wadoURLs.getFirst();
   }
 
+  /**
+   * Root URL of a DICOMweb node without trailing slash, as the query builds it: with one, the
+   * resource paths start with a double slash, which servers such as Orthanc answer with 404.
+   */
+  static String dicomWebRoot(DicomWebNode node) {
+    return withoutTrailingSlash(String.valueOf(node.getUrl()));
+  }
+
+  static String withoutTrailingSlash(String url) {
+    String u = url;
+    while (u.endsWith("/")) {
+      u = u.substring(0, u.length() - 1);
+    }
+    return u;
+  }
+
+  /**
+   * URL downloading a series. Departs from PS3.18 §10.6, which makes the Retrieve URL (0008,1190)
+   * of the query answer authoritative: an archive behind a reverse proxy or a NAT often reports
+   * its internal address or path, which answers 404 here. The configured root has just answered
+   * the query, so the answer is kept only when it lies under that root.
+   */
+  static String seriesRetrieveUrl(
+      String serverUrl, String baseUrl, String studyUid, String seriesUid) {
+    if (StringUtil.hasText(serverUrl) && serverUrl.startsWith(baseUrl + "/")) {
+      return serverUrl;
+    }
+    return baseUrl + "/studies/" + studyUid + "/series/" + seriesUid; // NON-NLS
+  }
+
   static String getHostname(String host) {
     if ("127.0.0.1".equals(host) || "127.0.1.1".equals(host) || "::1".equals(host)) { // NON-NLS
       return "localhost"; // NON-NLS
@@ -492,7 +522,7 @@ public class RetrieveTask extends ExplorerTask<ExplorerTask<Boolean, String>, St
       return;
     }
 
-    String baseUrl = retrieveNode.getUrl().toString();
+    String baseUrl = dicomWebRoot(retrieveNode);
     Properties props = new Properties();
     props.setProperty(RsQueryParams.P_DICOMWEB_URL, baseUrl);
     props.setProperty(RsQueryParams.P_ACCEPT_EXT, "transfer-syntax=*"); // NON-NLS
@@ -624,14 +654,13 @@ public class RetrieveTask extends ExplorerTask<ExplorerTask<Boolean, String>, St
       for (TagW tag : tags) {
         tag.readValue(seriesDataset, dicomSeries);
       }
-      if (!StringUtil.hasText(TagD.getTagValue(dicomSeries, Tag.RetrieveURL, String.class))) {
-        StringBuilder buf = new StringBuilder(baseUrl);
-        buf.append("/studies/"); // NON-NLS
-        buf.append(study.getTagValue(TagD.get(Tag.StudyInstanceUID)));
-        buf.append("/series/"); // NON-NLS
-        buf.append(seriesUID);
-        dicomSeries.setTag(TagD.get(Tag.RetrieveURL), buf.toString());
-      }
+      dicomSeries.setTag(
+          TagD.get(Tag.RetrieveURL),
+          seriesRetrieveUrl(
+              TagD.getTagValue(dicomSeries, Tag.RetrieveURL, String.class),
+              baseUrl,
+              TagD.getTagValue(study, Tag.StudyInstanceUID, String.class),
+              seriesUID));
 
       explorerDcmModel.addHierarchyNode(study, dicomSeries);
 

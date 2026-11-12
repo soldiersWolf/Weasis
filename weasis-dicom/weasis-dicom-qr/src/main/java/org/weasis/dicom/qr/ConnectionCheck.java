@@ -71,7 +71,7 @@ final class ConnectionCheck {
 
   private static Result checkWeb(DicomWebNode node, AuthMethod auth, long start)
       throws Exception {
-    String base = trimSlash(String.valueOf(node.getUrl()));
+    String base = RetrieveTask.dicomWebRoot(node);
     try {
       queryOneStudy(node, base, auth);
       return new Result(true, null, null, elapsed(start));
@@ -104,14 +104,6 @@ final class ConnectionCheck {
         throw new IOException("HTTP " + code); // NON-NLS
       }
     }
-  }
-
-  private static String trimSlash(String url) {
-    String u = url;
-    while (u.endsWith("/")) {
-      u = u.substring(0, u.length() - 1);
-    }
-    return u;
   }
 
   private static long elapsed(long start) {
