@@ -125,6 +125,11 @@ public class DicomExplorer extends PluginTool
 
   private final PatientSelectionManager patientSelectionManager;
 
+  /** Shows every patient in a searchable list instead of the patient combo and series filter. */
+  public static final String P_PATIENT_LIST = "weasis.dicom.explorer.patient.list"; // NON-NLS
+
+  private PatientListPanel patientList;
+
   private final boolean verticalLayout = true;
 
   // ========== Constructors ==========
@@ -256,6 +261,15 @@ public class DicomExplorer extends PluginTool
       MigLayout layout =
           new MigLayout("fillx, ins 5 0 5 0", "[right]rel[grow,fill]", "[]10lp[]"); // NON-NLS
       panelMain = new JPanel(layout);
+
+      if (GuiUtils.getUICore().getSystemPreferences().getBooleanProperty(P_PATIENT_LIST, false)) {
+        patientList = new PatientListPanel(this, modelPatient);
+        patientSelectionManager.addPatientSelectionListener(patientList);
+        panelMain.add(patientList, "newline, spanx, grow"); // NON-NLS
+        // The series filter bar is left out on purpose: the name search above replaces it
+        koOpen.setVisible(false);
+        return panelMain;
+      }
 
       // Small preferred width so the combos grow to fill the panel but never drive its width
       JPanel patientBar = new JPanel(new MigLayout("ins 1, fillx", "[grow,fill]", "")); // NON-NLS
