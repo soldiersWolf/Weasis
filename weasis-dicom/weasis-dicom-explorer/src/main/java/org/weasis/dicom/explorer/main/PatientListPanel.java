@@ -19,7 +19,6 @@ import java.awt.event.ActionEvent;
 import java.awt.event.KeyEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
-import java.nio.file.Path;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
@@ -69,7 +68,6 @@ import org.weasis.dicom.codec.DicomSeries;
 import org.weasis.dicom.codec.TagD;
 import org.weasis.dicom.explorer.DicomModel;
 import org.weasis.dicom.explorer.DicomSorter;
-import org.weasis.dicom.explorer.FolderWatcher;
 import org.weasis.dicom.explorer.LocalPersistence;
 import org.weasis.dicom.explorer.StudySources;
 
@@ -119,7 +117,6 @@ public class PatientListPanel extends JPanel
   private final JList<Row> list = new JList<>(shown);
   private final JTextField search = new JTextField();
   private final JLabel count = new JLabel();
-  private final JLabel watched = new JLabel();
   private final JComboBox<String> sourceFilter = new JComboBox<>();
   private final JButton viewButton = new JButton(PatientListMessages.getString("view"));
   private Density density = loadDensity();
@@ -133,15 +130,14 @@ public class PatientListPanel extends JPanel
     this.explorer = Objects.requireNonNull(explorer);
     this.source = Objects.requireNonNull(patients);
     setLayout(
-        new MigLayout(
-            "fill, ins 2 1 2 1", "[grow,fill]", "[][]2[]2[grow,fill]2[]")); // NON-NLS
+        // No row constraints: a hidden source filter removes its row, so the list grows by itself
+        new MigLayout("fill, ins 2 1 2 1, gapy 2", "[grow,fill]", "")); // NON-NLS
 
     search.putClientProperty(
         FlatClientProperties.PLACEHOLDER_TEXT, PatientListMessages.getString("search"));
     search.putClientProperty(FlatClientProperties.TEXT_FIELD_SHOW_CLEAR_BUTTON, true);
     search.getDocument().addDocumentListener(new FilterOnEdit());
     count.putClientProperty(FlatClientProperties.STYLE_CLASS, "small"); // NON-NLS
-    watched.putClientProperty(FlatClientProperties.STYLE_CLASS, "small"); // NON-NLS
 
     list.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
     list.setCellRenderer(new RowRenderer());
@@ -188,11 +184,9 @@ public class PatientListPanel extends JPanel
     add(searchBar, "growx"); // NON-NLS
     add(sourceFilter, "newline, growx, hidemode 3"); // NON-NLS
     add(count, "newline, growx"); // NON-NLS
-    add(scroll, "newline, grow, height 80lp:360lp:"); // NON-NLS
-    add(watched, "newline, growx, hidemode 3"); // NON-NLS
+    add(scroll, "newline, grow, push, height 80lp:360lp:"); // NON-NLS
 
     refreshLater.setRepeats(false);
-    FolderWatcher.addChangeListener(() -> GuiExecutor.execute(refreshLater::restart));
     source.addListDataListener(new RefreshOnChange());
     explorer
         .getDataExplorerModel()
@@ -391,16 +385,6 @@ public class PatientListPanel extends JPanel
         visits.size() == total
             ? PatientListMessages.format("count.all", total)
             : PatientListMessages.format("count", visits.size(), total));
-    List<Path> folders = FolderWatcher.getWatchedFolders();
-    watched.setVisible(!folders.isEmpty());
-    if (!folders.isEmpty()) {
-      watched.setText(
-          PatientListMessages.format(
-              "watching",
-              String.join(", ", folders.stream().map(FolderWatcher::labelOf).toList())));
-      watched.setToolTipText(
-          String.join("\n", folders.stream().map(Path::toString).toList()));
-    }
   }
 
   /** Lists the sources in the filter, which is shown only when there is more than one. */
