@@ -39,7 +39,9 @@ import javax.swing.event.ListDataEvent;
 import javax.swing.event.ListDataListener;
 import net.miginfocom.swing.MigLayout;
 import org.dcm4che3.data.Tag;
+import org.weasis.core.api.gui.util.GuiUtils;
 import org.weasis.core.api.media.data.MediaSeriesGroup;
+import org.weasis.core.ui.editor.image.ViewerPlugin;
 import org.weasis.dicom.codec.DicomSeries;
 import org.weasis.dicom.codec.TagD;
 import org.weasis.dicom.explorer.DicomModel;
@@ -99,6 +101,11 @@ public class PatientListPanel extends JPanel
     explorer.selectPatient(patient);
     if (explorer.getSeriesGroupFromPatient(patient, ListPosition.FIRST)
         instanceof DicomSeries series) {
+      // One viewer at a time: the picked patient replaces the previous one, as in a light box
+      List<ViewerPlugin<?>> open = new ArrayList<>(GuiUtils.getUICore().getViewerPlugins());
+      if (!open.isEmpty()) {
+        GuiUtils.getUICore().closeSeriesViewer(open);
+      }
       ThumbnailMouseAndKeyAdapter.openSeriesInDefaultPlugin(
           series, explorer.getDataExplorerModel());
     }

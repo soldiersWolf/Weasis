@@ -130,6 +130,11 @@ public class DicomExplorer extends PluginTool
 
   private PatientListPanel patientList;
 
+  /** Whether the patient list replaces the patient combo box (see {@link #P_PATIENT_LIST}). */
+  public static boolean isPatientListEnabled() {
+    return GuiUtils.getUICore().getSystemPreferences().getBooleanProperty(P_PATIENT_LIST, false);
+  }
+
   private final boolean verticalLayout = true;
 
   // ========== Constructors ==========
@@ -262,7 +267,7 @@ public class DicomExplorer extends PluginTool
           new MigLayout("fillx, ins 5 0 5 0", "[right]rel[grow,fill]", "[]10lp[]"); // NON-NLS
       panelMain = new JPanel(layout);
 
-      if (GuiUtils.getUICore().getSystemPreferences().getBooleanProperty(P_PATIENT_LIST, false)) {
+      if (isPatientListEnabled()) {
         patientList = new PatientListPanel(this, modelPatient);
         patientSelectionManager.addPatientSelectionListener(patientList);
         panelMain.add(patientList, "newline, spanx, grow"); // NON-NLS

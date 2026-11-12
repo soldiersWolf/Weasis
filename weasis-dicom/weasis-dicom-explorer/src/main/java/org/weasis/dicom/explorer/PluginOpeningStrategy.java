@@ -24,6 +24,7 @@ import org.weasis.core.ui.editor.TabFocusPolicy;
 import org.weasis.core.ui.editor.ViewerOpenOptions;
 import org.weasis.core.ui.editor.ViewerPluginBuilder;
 import org.weasis.dicom.explorer.HangingProtocols.OpeningViewer;
+import org.weasis.dicom.explorer.main.DicomExplorer;
 
 public class PluginOpeningStrategy {
 
@@ -39,7 +40,11 @@ public class PluginOpeningStrategy {
   }
 
   public PluginOpeningStrategy(OpeningViewer openingMode, boolean closePreviousViewers) {
-    this.openingMode = Objects.requireNonNullElse(openingMode, OpeningViewer.ALL_PATIENTS);
+    // With the patient list, images open only when a patient is picked in the list, never on import
+    this.openingMode =
+        DicomExplorer.isPatientListEnabled()
+            ? OpeningViewer.NONE
+            : Objects.requireNonNullElse(openingMode, OpeningViewer.ALL_PATIENTS);
     this.closePreviousViewers = closePreviousViewers;
     this.fullImportSession = true;
     this.loadStartedAt = Instant.now();
