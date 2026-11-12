@@ -386,7 +386,7 @@
     },
     {
       "code": "weasis.theme",
-      "value": "org.weasis.launcher.FlatWeasisTheme",
+      "value": "org.weasis.launcher.FlatWeasisLightTheme",
       "description": "FaltLaf Look and feel, see https://www.formdev.com/flatlaf/themes/",
       "type": "F",
       "category": "GENERAL"
@@ -401,7 +401,7 @@
     },
     {
       "code": "locale.lang.code",
-      "value": "en",
+      "value": "uk",
       "description": "Specifies the language code (see Java Locale: https://www.oracle.com/java/technologies/javase/jdk20-suported-locales.html). Default value is \"en\".",
       "type": "F",
       "category": "GENERAL"
@@ -448,6 +448,14 @@
       "value": "TEXT",
       "description": "Default series filter mode in the DICOM explorer. Possible values: TEXT (full text), DATE (study date), MODALITY",
       "type": "F",
+      "category": "DICOM"
+    },
+    {
+      "code": "weasis.dicom.explorer.patient.list",
+      "value": "true",
+      "description": "If true, the DICOM explorer shows every patient in a searchable list (one click or the arrow keys open the images) instead of the patient combo box and the series filter",
+      "type": "F",
+      "javaType": "BOOLEAN",
       "category": "DICOM"
     },
     {

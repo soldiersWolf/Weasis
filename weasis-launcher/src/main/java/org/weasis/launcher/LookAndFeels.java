@@ -56,6 +56,11 @@ public final class LookAndFeels {
             "org.weasis.launcher.FlatWeasisTheme",
             true);
     lookAndFeels = buildFlatLookAndFeels();
+    lookAndFeels.add(
+        new ReadableLookAndFeelInfo(
+            "Core Light - " + FlatWeasisLightTheme.NAME, // NON-NLS
+            FlatWeasisLightTheme.class.getName(),
+            false));
     lookAndFeels.add(defaultLightTheme);
     lookAndFeels.add(defaultDarkTheme);
   }
