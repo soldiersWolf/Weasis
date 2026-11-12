@@ -299,6 +299,7 @@ public class DicomMediaIO implements DcmMediaReader {
   private VR pixelDataVR = null;
 
   private final FileCache fileCache;
+  private boolean proScan = false;
 
   public DicomMediaIO(URI uri) {
     this.uri = Objects.requireNonNull(uri);
@@ -685,6 +686,13 @@ public class DicomMediaIO implements DcmMediaReader {
           DicomImageReadParam param = new DicomImageReadParam();
           param.setAllowFloatImageConversion(true);
           PlanarImage img = reader.getPlanarImage(frame, param);
+          if (proScan) {
+            PlanarImage repaired = ProScanFix.repairPixels(img);
+            if (repaired != img) {
+              img.toMat().release();
+            }
+            img = repaired;
+          }
           if (img.width() != desc.getColumns() || img.height() != desc.getRows()) {
             LOGGER.error(
                 "The native image size ({}x{}) does not match with the DICOM attributes({}x{})",
@@ -971,6 +979,15 @@ public class DicomMediaIO implements DcmMediaReader {
 
       if (numberOfFrame <= 0 && hasPixel) {
         this.numberOfFrame = 1;
+      }
+      if (!proScan && ProScanFix.isProScan(dcm)) {
+        // Vendor workaround: read a repaired copy instead of the malformed original (see ProScanFix)
+        Optional<Path> repaired = ProScanFix.repairIfNeeded(path);
+        if (repaired.isPresent()) {
+          proScan = true;
+          fileCache.setOriginalTempFile(repaired.get());
+          return readMetaData();
+        }
       }
       HEADER_CACHE.put(this, dicomMetaData);
       return dicomMetaData;
