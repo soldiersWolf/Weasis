@@ -86,8 +86,8 @@ public final class FolderWatcher {
         new FolderWatcher(
             files ->
                 DicomModel.LOADING_EXECUTOR.execute(
-                    new LoadLocalDicom(
-                        files.toArray(File[]::new), false, model, OpeningViewer.NONE)),
+                    new LoadLocalDicom(files.toArray(File[]::new), false, model, OpeningViewer.NONE)
+                        .withSourceLabel(sourceName())),
             Duration.ofDays(Math.max(1, days)));
     instance.startPolling();
     String saved = LocalPersistence.getProperties().getProperty(P_ROOT);
@@ -109,6 +109,10 @@ public final class FolderWatcher {
       FolderWatcher watcher = instance;
       watcher.scheduler.execute(() -> watcher.setRoot(path, false));
     }
+  }
+
+  private static String sourceName() {
+    return getWatchedFolder().map(p -> p.getFileName()).map(Object::toString).orElse(null);
   }
 
   /** The watched folder, empty when none. */

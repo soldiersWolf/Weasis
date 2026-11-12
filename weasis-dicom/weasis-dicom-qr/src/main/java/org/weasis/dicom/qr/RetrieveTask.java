@@ -42,6 +42,7 @@ import org.weasis.dicom.codec.TagD;
 import org.weasis.dicom.codec.utils.SeriesInstanceList;
 import org.weasis.dicom.explorer.DicomModel;
 import org.weasis.dicom.explorer.PluginOpeningStrategy;
+import org.weasis.dicom.explorer.StudySources;
 import org.weasis.dicom.explorer.exp.ExplorerTask;
 import org.weasis.dicom.explorer.pref.download.DicomExplorerPrefView;
 import org.weasis.dicom.explorer.pref.node.AbstractDicomNode;
@@ -116,6 +117,11 @@ public class RetrieveTask extends ExplorerTask<ExplorerTask<Boolean, String>, St
     String errorMessage = null;
 
     AbstractDicomNode selectedItem = source.archive();
+    if (selectedItem != null) {
+      for (String studyUid : selection.getStudyUids()) {
+        StudySources.register(studyUid, selectedItem.getDescription());
+      }
+    }
     if (selectedItem instanceof final DefaultDicomNode node) {
       DefaultDicomNode callingNode =
           (DefaultDicomNode) dicomQrView.getComboCallingNode().getSelectedItem();

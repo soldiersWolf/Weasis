@@ -58,6 +58,8 @@ import org.weasis.dicom.codec.DicomMediaIO;
 import org.weasis.dicom.codec.DicomMediaIO.Reading;
 import org.weasis.dicom.codec.DicomSeries;
 import org.weasis.dicom.codec.SortSeriesStack;
+import org.weasis.dicom.codec.TagD;
+import org.weasis.dicom.codec.TagD.Level;
 import org.weasis.dicom.codec.utils.DicomMediaUtils;
 import org.weasis.dicom.explorer.HangingProtocols.OpeningViewer;
 import org.weasis.dicom.explorer.imp.DicomZipCodec;
@@ -85,6 +87,7 @@ public class LoadLocalDicom extends LoadDicom {
   private final File[] files;
   private final boolean recursive;
   private final boolean cacheNetworkFiles;
+  private String sourceLabel;
 
   public LoadLocalDicom(
       File[] files, boolean recursive, DataExplorerModel explorerModel, OpeningViewer openingMode) {
@@ -101,9 +104,18 @@ public class LoadLocalDicom extends LoadDicom {
     this.recursive = recursive;
     this.cacheNetworkFiles =
         GuiUtils.getUICore().getSystemPreferences().getBooleanProperty(NETWORK_CACHE, true);
-    if (files.length == 1 && FolderWatcher.isEnabled() && files[0].isDirectory()) {
-      FolderWatcher.watchImported(files[0]);
+    if (files.length == 1 && files[0].isDirectory()) {
+      sourceLabel = files[0].getName();
+      if (FolderWatcher.isEnabled()) {
+        FolderWatcher.watchImported(files[0]);
+      }
     }
+  }
+
+  /** Names the source of the loaded studies, shown and filtered on in the explorer. */
+  public LoadLocalDicom withSourceLabel(String label) {
+    this.sourceLabel = label;
+    return this;
   }
 
   @Override
@@ -297,6 +309,8 @@ public class LoadLocalDicom extends LoadDicom {
         case READABLE -> {
           DirectoryState directory = pendingFile.directory();
           directory.series.add(buildDicomStructure(reader));
+          StudySources.register(
+              (String) reader.getTagValue(TagD.getUID(Level.STUDY)), sourceLabel);
           dirty.add(directory);
           attachSidecar(reader, result.file(), directory);
         }
