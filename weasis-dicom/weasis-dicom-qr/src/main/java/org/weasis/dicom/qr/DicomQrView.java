@@ -10,6 +10,7 @@
 package org.weasis.dicom.qr;
 
 import com.formdev.flatlaf.FlatClientProperties;
+import java.awt.Component;
 import java.awt.FlowLayout;
 import java.awt.event.ActionListener;
 import java.awt.event.ItemEvent;
@@ -122,7 +123,7 @@ import org.weasis.dicom.param.DicomState;
 import org.weasis.dicom.tool.DicomListener;
 import org.weasis.dicom.web.HttpWarning;
 
-public class DicomQrView extends AbstractItemDialogPage implements ImportDicom {
+public class DicomQrView extends AbstractItemDialogPage implements ImportDicom, RetrieveHost {
 
   private static final Logger LOGGER = LoggerFactory.getLogger(DicomQrView.class);
 
@@ -228,9 +229,9 @@ public class DicomQrView extends AbstractItemDialogPage implements ImportDicom {
   }
 
   private static final String LAST_SEL_NODE = "lastSelNode";
-  private static final String LAST_CALLING_NODE = "lastCallingNode";
+  static final String LAST_CALLING_NODE = "lastCallingNode";
   private static final String LAST_DICOM_CHARSET = "lastRDicomCharset";
-  private static final String LAST_RETRIEVE_TYPE = "lastRetrieveType";
+  static final String LAST_RETRIEVE_TYPE = "lastRetrieveType";
   private static final String LAST_RETRIEVE_LIMIT = "lastRetrieveLimit";
   private static final String LAST_SEL_TEMPLATE = "lastSelTemplate";
   private final JComboBox<AbstractDicomNode> comboDestinationNode = new JComboBox<>();
@@ -892,12 +893,13 @@ public class DicomQrView extends AbstractItemDialogPage implements ImportDicom {
     }
   }
 
-  /** Adds the character set and the study attributes a C-FIND must return. */
   private void addStudyFindParams(List<DicomParam> p) {
-    CharsetEncoding encoding = (CharsetEncoding) comboCharset.getSelectedItem();
-    if (encoding == null) {
-      encoding = CharsetEncoding.ISO_IR_192;
-    }
+    addStudyFindParams(p, (CharsetEncoding) comboCharset.getSelectedItem());
+  }
+
+  /** Adds the character set and the study attributes a C-FIND must return. */
+  static void addStudyFindParams(List<DicomParam> p, CharsetEncoding charset) {
+    CharsetEncoding encoding = charset == null ? CharsetEncoding.ISO_IR_192 : charset;
     p.add(new DicomParam(Tag.SpecificCharacterSet, encoding.getLabel()));
 
     // see http://dicom.nema.org/medical/dicom/current/output/html/part04.html#sect_C.6
@@ -919,7 +921,7 @@ public class DicomQrView extends AbstractItemDialogPage implements ImportDicom {
     addReturnTags(p, new DicomParam(Tag.NumberOfStudyRelatedInstances));
   }
 
-  private static AdvancedParams buildFindParams(boolean fuzzy) {
+  static AdvancedParams buildFindParams(boolean fuzzy) {
     AdvancedParams params = new AdvancedParams();
     ConnectOptions connectOptions = new ConnectOptions();
     connectOptions.setConnectTimeout(3000);
@@ -932,7 +934,7 @@ public class DicomQrView extends AbstractItemDialogPage implements ImportDicom {
   }
 
   /** Authentication of a DICOMweb archive, null when the user did not sign in. */
-  private static AuthMethod resolveAuthMethod(DicomWebNode node) {
+  static AuthMethod resolveAuthMethod(DicomWebNode node) {
     AuthMethod auth = AuthenticationPersistence.getAuthMethod(node.getAuthMethodUid());
     if (!OAuth2ServiceFactory.NO_AUTH.equals(auth)) {
       String oldCode = auth.getCode();
@@ -1510,15 +1512,19 @@ public class DicomQrView extends AbstractItemDialogPage implements ImportDicom {
     }
   }
 
-  /** WADO-RS node downloading the images of a QIDO-RS archive, null for a DIMSE archive. */
   private DicomWebNode findWadoRsNode(AbstractDicomNode archive) {
+    return findWadoRsNode(archive, this);
+  }
+
+  /** WADO-RS node downloading the images of a QIDO-RS archive, null for a DIMSE archive. */
+  static DicomWebNode findWadoRsNode(AbstractDicomNode archive, Component parent) {
     if (archive instanceof DicomWebNode webNode && webNode.getWebType() == WebType.QIDORS) {
       List<AbstractDicomNode> webNodes =
           AbstractDicomNode.loadDicomNodes(
               AbstractDicomNode.Type.WEB, AbstractDicomNode.UsageType.RETRIEVE, WebType.WADORS);
       String host = RetrieveTask.getHostname(webNode.getUrl().getHost());
       String m1 = Messages.getString("DicomQrView.no.url.matches.with.the.qido");
-      return RetrieveTask.getWadoUrl(this, host, webNodes, m1);
+      return RetrieveTask.getWadoUrl(parent, host, webNodes, m1);
     }
     return null;
   }
@@ -1541,6 +1547,26 @@ public class DicomQrView extends AbstractItemDialogPage implements ImportDicom {
 
   public DicomModel getDicomModel() {
     return tree.getRetrieveTreeModel().getDicomModel();
+  }
+
+  @Override
+  public DicomModel getQueryModel() {
+    return getDicomModel();
+  }
+
+  @Override
+  public DefaultDicomNode getCallingNode() {
+    return (DefaultDicomNode) comboCallingNode.getSelectedItem();
+  }
+
+  @Override
+  public RetrieveType getRetrieveType() {
+    return (RetrieveType) comboDicomRetrieveType.getSelectedItem();
+  }
+
+  @Override
+  public Component getDialogParent() {
+    return this;
   }
 
   public DicomWebNode getRetrieveNode() {

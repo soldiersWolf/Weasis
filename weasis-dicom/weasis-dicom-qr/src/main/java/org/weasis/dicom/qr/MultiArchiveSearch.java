@@ -170,6 +170,11 @@ public class MultiArchiveSearch {
     return uids;
   }
 
+  /** Studies found on any archive. */
+  public Set<String> getStudyUids() {
+    return Set.copyOf(archiveByStudy.keySet());
+  }
+
   public DicomModel getModel() {
     return model;
   }

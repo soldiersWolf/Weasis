@@ -9,6 +9,7 @@
  */
 package org.weasis.dicom.qr;
 
+import java.awt.Component;
 import java.net.URL;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -70,7 +71,7 @@ public class RetrieveTask extends ExplorerTask<ExplorerTask<Boolean, String>, St
 
   private final RetrieveSelection selection;
   private final DicomModel explorerDcmModel;
-  private final DicomQrView dicomQrView;
+  private final RetrieveHost host;
   private final RetrieveSource source;
   protected final PluginOpeningStrategy openingStrategy;
 
@@ -98,12 +99,12 @@ public class RetrieveTask extends ExplorerTask<ExplorerTask<Boolean, String>, St
   public RetrieveTask(
       RetrieveSelection selection,
       DicomModel explorerDcmModel,
-      DicomQrView dicomQrView,
+      RetrieveHost host,
       RetrieveSource source) {
     super(AbstractDicomNode.UsageType.RETRIEVE.toString(), false);
     this.selection = selection;
     this.explorerDcmModel = explorerDcmModel;
-    this.dicomQrView = dicomQrView;
+    this.host = host;
     this.source = source;
     this.openingStrategy = new PluginOpeningStrategy(DownloadManager.getOpeningViewer());
   }
@@ -124,12 +125,12 @@ public class RetrieveTask extends ExplorerTask<ExplorerTask<Boolean, String>, St
     }
     if (selectedItem instanceof final DefaultDicomNode node) {
       DefaultDicomNode callingNode =
-          (DefaultDicomNode) dicomQrView.getComboCallingNode().getSelectedItem();
+          host.getCallingNode();
       if (callingNode == null) {
         errorMessage = Messages.getString("RetrieveTask.no_calling_node");
       } else {
         RetrieveType type =
-            (RetrieveType) dicomQrView.getComboDicomRetrieveType().getSelectedItem();
+            host.getRetrieveType();
         AdvancedParams params = new AdvancedParams();
         ConnectOptions connectOptions = new ConnectOptions();
         connectOptions.setConnectTimeout(3000);
@@ -158,11 +159,11 @@ public class RetrieveTask extends ExplorerTask<ExplorerTask<Boolean, String>, St
       final String mes = errorMessage;
       final String errorTitle =
           StringUtil.getEmptyStringIfNull(
-              dicomQrView.getComboDicomRetrieveType().getSelectedItem());
+              host.getRetrieveType());
       GuiExecutor.execute(
           () ->
               JOptionPane.showMessageDialog(
-                  WinUtil.getValidComponent(dicomQrView),
+                  WinUtil.getValidComponent(host.getDialogParent()),
                   mes,
                   errorTitle,
                   JOptionPane.ERROR_MESSAGE));
@@ -178,7 +179,7 @@ public class RetrieveTask extends ExplorerTask<ExplorerTask<Boolean, String>, St
             AbstractDicomNode.Type.WEB, AbstractDicomNode.UsageType.RETRIEVE, WebType.WADO);
     String host = getHostname(node.getDicomNode().getHostname());
     String m1 = Messages.getString("RetrieveTask.no_wado_url_match");
-    DicomWebNode wnode = getWadoUrl(dicomQrView, host, webNodes, m1);
+    DicomWebNode wnode = getWadoUrl(this.host.getDialogParent(), host, webNodes, m1);
     if (wnode == null) {
       return null;
     }
@@ -202,12 +203,12 @@ public class RetrieveTask extends ExplorerTask<ExplorerTask<Boolean, String>, St
       DefaultDicomNode calledNode,
       RetrieveType type,
       WadoParameters wadoParameters) {
-    DicomModel queryModel = dicomQrView.getDicomModel();
+    DicomModel queryModel = host.getQueryModel();
     if (queryModel == null) {
       return Messages.getString("RetrieveTask.msg_unexpected_error");
     }
 
-    DicomListener dicomListener = dicomQrView.getDicomListener();
+    DicomListener dicomListener = host.getDicomListener();
     Path storageDir;
     if (RetrieveType.CMOVE == type) {
       if (dicomListener == null) {
@@ -430,7 +431,7 @@ public class RetrieveTask extends ExplorerTask<ExplorerTask<Boolean, String>, St
   }
 
   static DicomWebNode getWadoUrl(
-      DicomQrView dicomQrView, String host, List<AbstractDicomNode> webNodes, String message1) {
+      Component parent, String host, List<AbstractDicomNode> webNodes, String message1) {
     List<DicomWebNode> wadoURLs = new ArrayList<>();
     for (AbstractDicomNode n : webNodes) {
       if (n instanceof DicomWebNode wn) {
@@ -446,7 +447,7 @@ public class RetrieveTask extends ExplorerTask<ExplorerTask<Boolean, String>, St
       GuiExecutor.execute(
           () ->
               JOptionPane.showMessageDialog(
-                  WinUtil.getValidComponent(dicomQrView),
+                  WinUtil.getValidComponent(parent),
                   message1,
                   null,
                   JOptionPane.ERROR_MESSAGE));
@@ -457,7 +458,7 @@ public class RetrieveTask extends ExplorerTask<ExplorerTask<Boolean, String>, St
             Object[] options = wadoURLs.toArray();
             Object response =
                 JOptionPane.showInputDialog(
-                    WinUtil.getValidComponent(dicomQrView),
+                    WinUtil.getValidComponent(parent),
                     Messages.getString("RetrieveTask.several_wado_urls"),
                     wadoURLs.getFirst().getWebType().toString(),
                     JOptionPane.QUESTION_MESSAGE,
@@ -482,7 +483,7 @@ public class RetrieveTask extends ExplorerTask<ExplorerTask<Boolean, String>, St
   }
 
   private void fillSeries() {
-    DicomModel dicomModel = dicomQrView.getDicomModel();
+    DicomModel dicomModel = host.getQueryModel();
     if (dicomModel == null) {
       return;
     }
