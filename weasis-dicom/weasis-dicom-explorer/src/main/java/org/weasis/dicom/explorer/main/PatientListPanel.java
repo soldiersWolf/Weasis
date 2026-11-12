@@ -14,24 +14,34 @@ import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
 import java.awt.Font;
+import java.awt.event.ActionEvent;
+import java.awt.event.KeyEvent;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.FormatStyle;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.StringJoiner;
+import java.util.function.Predicate;
+import javax.swing.AbstractAction;
 import javax.swing.BorderFactory;
 import javax.swing.DefaultListModel;
+import javax.swing.JComponent;
 import javax.swing.JLabel;
 import javax.swing.JList;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.JTextField;
+import javax.swing.KeyStroke;
 import javax.swing.ListCellRenderer;
 import javax.swing.ListModel;
 import javax.swing.ListSelectionModel;
@@ -66,8 +76,8 @@ public class PatientListPanel extends JPanel
   /** One line of the list: a day header or a visit. */
   sealed interface Row permits DayRow, VisitRow {}
 
-  /** Header of a day with the number of visits below it; a null date gathers undated ones. */
-  record DayRow(LocalDate date, int visits) implements Row {}
+  /** Header of a day with its number of visits; a null date gathers the undated ones. */
+  record DayRow(LocalDate date, int visits, boolean expanded) implements Row {}
 
   /** A study of a patient, the unit that is opened. */
   record VisitRow(MediaSeriesGroup patient, MediaSeriesGroup study, LocalDate date, LocalTime time)
@@ -88,7 +98,8 @@ public class PatientListPanel extends JPanel
   private final JLabel count = new JLabel();
   private final JLabel watched = new JLabel();
   private final Timer refreshLater = new Timer(400, _ -> refresh());
-  private int lastIndex = -1;
+  // Days the user opened or closed; the other days follow the default (only the latest is open)
+  private final Map<LocalDate, Boolean> toggledDays = new HashMap<>();
   private boolean adjusting;
 
   public PatientListPanel(DicomExplorer explorer, ListModel<Object> patients) {
@@ -108,10 +119,28 @@ public class PatientListPanel extends JPanel
     list.setCellRenderer(new RowRenderer());
     list.addListSelectionListener(
         e -> {
-          if (!e.getValueIsAdjusting() && !adjusting) {
-            onSelection();
+          if (!e.getValueIsAdjusting()
+              && !adjusting
+              && list.getSelectedValue() instanceof VisitRow visit) {
+            open(visit);
           }
         });
+    list.addMouseListener(
+        new MouseAdapter() {
+          @Override
+          public void mouseClicked(MouseEvent e) {
+            int index = list.locationToIndex(e.getPoint());
+            if (index >= 0
+                && list.getCellBounds(index, index).contains(e.getPoint())
+                && shown.get(index) instanceof DayRow day) {
+              toggle(day, !day.expanded());
+            }
+          }
+        });
+    bindKey(KeyEvent.VK_RIGHT, "expandDay", true); // NON-NLS
+    bindKey(KeyEvent.VK_ENTER, "toggleDay", null); // NON-NLS
+    bindKey(KeyEvent.VK_SPACE, "toggleDayBySpace", null); // NON-NLS
+    bindKey(KeyEvent.VK_LEFT, "collapseDay", false); // NON-NLS
 
     JScrollPane scroll = new JScrollPane(list);
     scroll.setBorder(BorderFactory.createLineBorder(UIManager.getColor("Component.borderColor")));
@@ -137,25 +166,43 @@ public class PatientListPanel extends JPanel
     refresh();
   }
 
-  /** A header cannot be opened: move on to the visit next to it, in the direction of travel. */
-  private void onSelection() {
-    int index = list.getSelectedIndex();
-    if (index >= 0 && shown.get(index) instanceof DayRow) {
-      int next = index >= lastIndex ? index + 1 : index - 1;
-      if (next < 0 || next >= shown.size()) {
-        next = index + 1 < shown.size() ? index + 1 : -1;
+  /**
+   * Binds a key acting on the selected day header: expand, collapse or, with a null state, toggle.
+   * On a visit, the left key collapses the day of the visit.
+   */
+  private void bindKey(int key, String name, Boolean expand) {
+    list.getInputMap(JComponent.WHEN_FOCUSED).put(KeyStroke.getKeyStroke(key, 0), name);
+    list.getActionMap()
+        .put(
+            name,
+            new AbstractAction() {
+              @Override
+              public void actionPerformed(ActionEvent e) {
+                Row row = list.getSelectedValue();
+                if (row instanceof DayRow day) {
+                  toggle(day, expand == null ? !day.expanded() : expand);
+                } else if (row instanceof VisitRow visit && Boolean.FALSE.equals(expand)) {
+                  toggle(new DayRow(visit.date(), 0, true), false);
+                }
+              }
+            });
+  }
+
+  private void toggle(DayRow day, boolean expand) {
+    toggledDays.put(day.date(), expand);
+    refresh();
+    for (int i = 0; i < shown.size(); i++) {
+      if (shown.get(i) instanceof DayRow d && Objects.equals(d.date(), day.date())) {
+        adjusting = true;
+        try {
+          list.setSelectedIndex(i);
+          list.ensureIndexIsVisible(expand ? Math.min(i + d.visits(), shown.size() - 1) : i);
+          list.ensureIndexIsVisible(i);
+        } finally {
+          adjusting = false;
+        }
+        return;
       }
-      if (next >= 0) {
-        list.setSelectedIndex(next); // Fires again with the visit
-        list.ensureIndexIsVisible(next);
-      } else {
-        list.clearSelection();
-      }
-      return;
-    }
-    lastIndex = index;
-    if (index >= 0 && shown.get(index) instanceof VisitRow visit) {
-      open(visit);
     }
   }
 
@@ -187,8 +234,11 @@ public class PatientListPanel extends JPanel
     return Optional.empty();
   }
 
-  /** Sorts the visits, most recent day first and by time within a day, under day headers. */
-  static List<Row> buildRows(List<VisitRow> visits) {
+  /**
+   * Sorts the visits, most recent day first and by time within a day, under day headers; the
+   * visits of a closed day are left out.
+   */
+  static List<Row> buildRows(List<VisitRow> visits, Predicate<LocalDate> isExpanded) {
     List<VisitRow> sorted = new ArrayList<>(visits);
     sorted.sort(VISIT_ORDER);
     List<Row> rows = new ArrayList<>();
@@ -199,8 +249,11 @@ public class PatientListPanel extends JPanel
       while (end < sorted.size() && Objects.equals(sorted.get(end).date(), day)) {
         end++;
       }
-      rows.add(new DayRow(day, end - i));
-      rows.addAll(sorted.subList(i, end));
+      boolean expanded = isExpanded.test(day);
+      rows.add(new DayRow(day, end - i, expanded));
+      if (expanded) {
+        rows.addAll(sorted.subList(i, end));
+      }
       i = end;
     }
     return rows;
@@ -229,7 +282,16 @@ public class PatientListPanel extends JPanel
     Row selected = list.getSelectedValue();
     String query = search.getText().strip().toLowerCase(Locale.ROOT);
     List<VisitRow> visits = collectVisits(query);
-    List<Row> rows = buildRows(visits);
+    LocalDate latest =
+        visits.stream().map(VisitRow::date).filter(Objects::nonNull).max(LocalDate::compareTo)
+            .orElse(null);
+    // While searching every day is open, so that no match is hidden
+    List<Row> rows =
+        buildRows(
+            visits,
+            day ->
+                !query.isEmpty()
+                    || toggledDays.getOrDefault(day, Objects.equals(day, latest)));
     adjusting = true;
     try {
       shown.clear();
@@ -237,7 +299,6 @@ public class PatientListPanel extends JPanel
       int index = selected instanceof VisitRow v ? indexOfStudy(v.study()) : -1;
       if (index >= 0) {
         list.setSelectedIndex(index);
-        lastIndex = index;
       }
     } finally {
       adjusting = false;
@@ -282,7 +343,6 @@ public class PatientListPanel extends JPanel
         try {
           list.setSelectedIndex(i);
           list.ensureIndexIsVisible(i);
-          lastIndex = i;
         } finally {
           adjusting = false;
         }
@@ -371,10 +431,17 @@ public class PatientListPanel extends JPanel
       if (row instanceof DayRow day) {
         Color accent = UIManager.getColor("Component.accentColor");
         Color header = UIManager.getColor("TableHeader.background");
-        dayCell.setBackground(header != null ? header : jList.getBackground());
-        dayTitle.setForeground(accent != null ? accent : jList.getForeground());
-        dayCount.setForeground(accent != null ? accent : jList.getForeground());
-        dayTitle.setText(titleOf(day.date()));
+        dayCell.setBackground(
+            isSelected
+                ? jList.getSelectionBackground()
+                : header != null ? header : jList.getBackground());
+        Color title =
+            isSelected
+                ? jList.getSelectionForeground()
+                : accent != null ? accent : jList.getForeground();
+        dayTitle.setForeground(title);
+        dayCount.setForeground(title);
+        dayTitle.setText((day.expanded() ? "▾  " : "▸  ") + titleOf(day.date()));
         dayCount.setText(String.valueOf(day.visits()));
         return dayCell;
       }

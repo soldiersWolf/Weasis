@@ -36,7 +36,7 @@ class PatientListPanelTest {
 
   private static String describe(Row row) {
     return switch (row) {
-      case DayRow day -> "# " + day.date() + " (" + day.visits() + ")";
+      case DayRow day -> (day.expanded() ? "v " : "> ") + day.date() + " (" + day.visits() + ")";
       case VisitRow visit -> visit.patient().toString();
     };
   }
@@ -49,22 +49,38 @@ class PatientListPanelTest {
                 visit("Late", NOV_11, "12:55"),
                 visit("Undated", null, null),
                 visit("Today", NOV_12, "08:00"),
-                visit("Early", NOV_11, "08:08")));
+                visit("Early", NOV_11, "08:08")),
+            _ -> true);
 
     assertEquals(
         List.of(
-            "# 2026-11-12 (1)",
+            "v 2026-11-12 (1)",
             "Today",
-            "# 2026-11-11 (2)",
+            "v 2026-11-11 (2)",
             "Early",
             "Late",
-            "# null (1)",
+            "v null (1)",
             "Undated"),
         rows.stream().map(PatientListPanelTest::describe).toList());
   }
 
   @Test
+  void aClosedDayShowsOnlyItsHeaderWithTheCount() {
+    List<Row> rows =
+        PatientListPanel.buildRows(
+            List.of(
+                visit("Today", NOV_12, "08:00"),
+                visit("Early", NOV_11, "08:08"),
+                visit("Late", NOV_11, "12:55")),
+            NOV_12::equals);
+
+    assertEquals(
+        List.of("v 2026-11-12 (1)", "Today", "> 2026-11-11 (2)"),
+        rows.stream().map(PatientListPanelTest::describe).toList());
+  }
+
+  @Test
   void showsNothingWithoutVisits() {
-    assertEquals(List.of(), PatientListPanel.buildRows(List.of()));
+    assertEquals(List.of(), PatientListPanel.buildRows(List.of(), _ -> true));
   }
 }
