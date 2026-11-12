@@ -32,6 +32,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.StringJoiner;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Predicate;
 import javax.swing.AbstractAction;
 import javax.swing.BorderFactory;
@@ -102,7 +103,10 @@ public class PatientListPanel extends JPanel
     DETAILED
   }
 
-  private static final String P_DENSITY = "patient.list.density"; // NON-NLS
+  /** Preference key of the view density: COMPACT, NORMAL or DETAILED. */
+  public static final String P_DENSITY = "patient.list.density"; // NON-NLS
+
+  private static final List<PatientListPanel> INSTANCES = new CopyOnWriteArrayList<>();
 
   private static final Comparator<VisitRow> DAY_ORDER =
       Comparator.comparing(VisitRow::date, Comparator.nullsLast(Comparator.reverseOrder()));
@@ -129,6 +133,7 @@ public class PatientListPanel extends JPanel
   public PatientListPanel(DicomExplorer explorer, ListModel<Object> patients) {
     this.explorer = Objects.requireNonNull(explorer);
     this.source = Objects.requireNonNull(patients);
+    INSTANCES.add(this);
     setLayout(
         // No row constraints: a hidden source filter removes its row, so the list grows by itself
         new MigLayout("fill, ins 2 1 2 1, gapy 2", "[grow,fill]", "")); // NON-NLS
@@ -223,6 +228,23 @@ public class PatientListPanel extends JPanel
                 }
               }
             });
+  }
+
+  /** Changes the view density of every patient list, from the preferences for instance. */
+  public static void applyDensity(String density) {
+    LocalPersistence.getProperties().setProperty(P_DENSITY, density);
+    GuiExecutor.execute(
+        () ->
+            INSTANCES.forEach(
+                panel -> {
+                  panel.density = loadDensity();
+                  panel.refresh();
+                }));
+  }
+
+  /** The view density saved in the preferences. */
+  public static String getDensity() {
+    return loadDensity().name();
   }
 
   private static Density loadDensity() {

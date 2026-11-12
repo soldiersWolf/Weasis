@@ -10,15 +10,21 @@
 package org.weasis.dicom.qr;
 
 import java.util.Hashtable;
-import org.weasis.dicom.explorer.imp.DicomImportFactory;
-import org.weasis.dicom.explorer.imp.ImportDicom;
+import org.weasis.core.api.gui.Insertable;
+import org.weasis.core.api.gui.PreferencesPageFactory;
+import org.weasis.core.api.gui.util.AbstractItemDialogPage;
 
-/** Adds the sources page, the watched folders and the synchronized archives, to the import. */
-@org.osgi.service.component.annotations.Component(service = DicomImportFactory.class)
-public class SourcesFactory implements DicomImportFactory {
+/** Adds the basics page, list view, watched folders and synchronized archives, first. */
+@org.osgi.service.component.annotations.Component(service = PreferencesPageFactory.class)
+public class SourcesFactory implements PreferencesPageFactory {
 
   @Override
-  public ImportDicom createDicomImportPage(Hashtable<String, Object> properties) {
+  public AbstractItemDialogPage createInstance(Hashtable<String, Object> properties) {
     return new SourcesView();
+  }
+
+  @Override
+  public boolean isComponentCreatedByThisFactory(Insertable component) {
+    return component instanceof SourcesView;
   }
 }

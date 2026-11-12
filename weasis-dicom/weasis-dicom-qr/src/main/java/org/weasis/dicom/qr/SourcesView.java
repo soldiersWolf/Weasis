@@ -15,6 +15,7 @@ import java.nio.file.Path;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import javax.swing.BorderFactory;
+import javax.swing.ButtonGroup;
 import javax.swing.DefaultListModel;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
@@ -22,7 +23,7 @@ import javax.swing.JFileChooser;
 import javax.swing.JLabel;
 import javax.swing.JList;
 import javax.swing.JPanel;
-import javax.swing.JProgressBar;
+import javax.swing.JRadioButton;
 import javax.swing.JScrollPane;
 import javax.swing.JSpinner;
 import javax.swing.SpinnerNumberModel;
@@ -30,16 +31,15 @@ import javax.swing.UIManager;
 import net.miginfocom.swing.MigLayout;
 import org.weasis.core.api.gui.util.AbstractItemDialogPage;
 import org.weasis.core.api.gui.util.GuiExecutor;
-import org.weasis.dicom.explorer.DicomModel;
 import org.weasis.dicom.explorer.FolderWatcher;
-import org.weasis.dicom.explorer.imp.ImportDicom;
+import org.weasis.dicom.explorer.main.PatientListPanel;
 import org.weasis.dicom.explorer.pref.node.AbstractDicomNode;
 
 /**
- * Single place for the automatic sources of the explorer: the watched folders and the archives
- * whose studies of the day are pulled in the background. Import checks every source at once.
+ * First page of the preferences, in plain words: how the patient list looks, the watched folders
+ * and the archives whose studies of the day are pulled in the background.
  */
-public class SourcesView extends AbstractItemDialogPage implements ImportDicom {
+public class SourcesView extends AbstractItemDialogPage {
 
   private final DefaultListModel<Path> folders = new DefaultListModel<>();
   private final JList<Path> folderList = new JList<>(folders);
@@ -50,11 +50,12 @@ public class SourcesView extends AbstractItemDialogPage implements ImportDicom {
   public SourcesView() {
     super(MultiArchiveMessages.getString("sources.title"), -10);
     setComponentPosition(-10);
-    setLayout(new MigLayout("fill, ins 10", "[grow,fill]", "[][grow,fill][grow,fill]")); // NON-NLS
+    setLayout(new MigLayout("fill, ins 10, gapy 10", "[grow,fill]", "")); // NON-NLS
 
     JLabel hint = new JLabel(MultiArchiveMessages.getString("sources.hint"));
     hint.setForeground(UIManager.getColor("Label.disabledForeground"));
     add(hint, "wrap"); // NON-NLS
+    add(buildListPanel(), "growx, wrap"); // NON-NLS
 
     add(buildFoldersPanel(), "grow, wrap"); // NON-NLS
     add(buildArchivesPanel(), "grow, wrap"); // NON-NLS
@@ -63,6 +64,24 @@ public class SourcesView extends AbstractItemDialogPage implements ImportDicom {
     ServerWatcher.getInstance().addChangeListener(() -> GuiExecutor.execute(this::refreshArchives));
     refreshFolders();
     refreshArchives();
+  }
+
+  private JPanel buildListPanel() {
+    JPanel panel = new JPanel(new MigLayout("ins 6, gap 16")); // NON-NLS
+    panel.setBorder(
+        BorderFactory.createTitledBorder(MultiArchiveMessages.getString("basics.list")));
+    ButtonGroup group = new ButtonGroup();
+    String current = PatientListPanel.getDensity();
+    for (String density : new String[] {"COMPACT", "NORMAL", "DETAILED"}) { // NON-NLS
+      JRadioButton button =
+          new JRadioButton(
+              MultiArchiveMessages.getString("basics.density." + density),
+              density.equals(current));
+      button.addActionListener(_ -> PatientListPanel.applyDensity(density));
+      group.add(button);
+      panel.add(button);
+    }
+    return panel;
   }
 
   private JPanel buildFoldersPanel() {
@@ -168,11 +187,6 @@ public class SourcesView extends AbstractItemDialogPage implements ImportDicom {
   private static void checkAll() {
     FolderWatcher.pollNow();
     ServerWatcher.getInstance().checkNow();
-  }
-
-  @Override
-  public void importDICOM(DicomModel dicomModel, JProgressBar info) {
-    checkAll();
   }
 
   @Override

@@ -111,7 +111,8 @@ public class PreferenceDialog extends AbstractWizardDialog {
             AbstractItemDialogPage page = factory.createInstance(properties);
             if (page != null) {
               int position = page.getComponentPosition();
-              if (position < 1000) {
+              // A negative position puts a page at the top level, before the general settings
+              if (position >= 0 && position < 1000) {
                 AbstractItemDialogPage mainPage;
                 if (position > 500 && position < 600) {
                   mainPage = viewerSetting;
