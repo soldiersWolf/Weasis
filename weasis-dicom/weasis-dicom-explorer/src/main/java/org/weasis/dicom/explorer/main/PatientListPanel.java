@@ -11,12 +11,15 @@ package org.weasis.dicom.explorer.main;
 
 import com.formdev.flatlaf.FlatClientProperties;
 import java.awt.BorderLayout;
+import java.awt.Color;
 import java.awt.Component;
 import java.awt.Font;
 import java.time.LocalDate;
+import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.FormatStyle;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
@@ -32,6 +35,7 @@ import javax.swing.JTextField;
 import javax.swing.ListCellRenderer;
 import javax.swing.ListModel;
 import javax.swing.ListSelectionModel;
+import javax.swing.Timer;
 import javax.swing.UIManager;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
@@ -39,6 +43,8 @@ import javax.swing.event.ListDataEvent;
 import javax.swing.event.ListDataListener;
 import net.miginfocom.swing.MigLayout;
 import org.dcm4che3.data.Tag;
+import org.weasis.core.api.explorer.ObservableEvent;
+import org.weasis.core.api.gui.util.GuiExecutor;
 import org.weasis.core.api.gui.util.GuiUtils;
 import org.weasis.core.api.media.data.MediaSeriesGroup;
 import org.weasis.core.ui.editor.image.ViewerPlugin;
@@ -46,40 +52,64 @@ import org.weasis.dicom.codec.DicomSeries;
 import org.weasis.dicom.codec.TagD;
 import org.weasis.dicom.explorer.DicomModel;
 import org.weasis.dicom.explorer.DicomSorter;
+import org.weasis.dicom.explorer.FolderWatcher;
 
 /**
- * Always-visible list of every loaded patient, with a name search. Selecting a row, with the mouse
- * or the arrow keys, selects the patient and opens its first series, so that a whole screening
- * session can be read by walking down the list.
+ * Always-visible list of every loaded visit, grouped by day with the most recent day first and a
+ * name search. Picking a visit, with the mouse or the arrow keys, opens its images in a single
+ * viewer, so that a screening session is read by walking down the list. Visits loaded later, for
+ * instance by the folder watcher, appear in place without disturbing the selection.
  */
 public class PatientListPanel extends JPanel
     implements PatientSelectionManager.PatientSelectionListener {
 
+  /** One line of the list: a day header or a visit. */
+  sealed interface Row permits DayRow, VisitRow {}
+
+  /** Header of a day with the number of visits below it; a null date gathers undated ones. */
+  record DayRow(LocalDate date, int visits) implements Row {}
+
+  /** A study of a patient, the unit that is opened. */
+  record VisitRow(MediaSeriesGroup patient, MediaSeriesGroup study, LocalDate date, LocalTime time)
+      implements Row {}
+
+  private static final Comparator<VisitRow> DAY_ORDER =
+      Comparator.comparing(VisitRow::date, Comparator.nullsLast(Comparator.reverseOrder()));
+  private static final Comparator<VisitRow> VISIT_ORDER =
+      DAY_ORDER
+          .thenComparing(VisitRow::time, Comparator.nullsLast(Comparator.naturalOrder()))
+          .thenComparing(v -> v.patient().toString());
+
   private final DicomExplorer explorer;
   private final ListModel<Object> source;
-  private final DefaultListModel<MediaSeriesGroup> shown = new DefaultListModel<>();
-  private final JList<MediaSeriesGroup> list = new JList<>(shown);
+  private final DefaultListModel<Row> shown = new DefaultListModel<>();
+  private final JList<Row> list = new JList<>(shown);
   private final JTextField search = new JTextField();
   private final JLabel count = new JLabel();
+  private final JLabel watched = new JLabel();
+  private final Timer refreshLater = new Timer(400, _ -> refresh());
+  private int lastIndex = -1;
   private boolean adjusting;
 
   public PatientListPanel(DicomExplorer explorer, ListModel<Object> patients) {
     this.explorer = Objects.requireNonNull(explorer);
     this.source = Objects.requireNonNull(patients);
-    setLayout(new MigLayout("fill, ins 2 1 2 1", "[grow,fill]", "[][]2[grow,fill]")); // NON-NLS
+    setLayout(
+        new MigLayout("fill, ins 2 1 2 1", "[grow,fill]", "[][]2[grow,fill]2[]")); // NON-NLS
 
     search.putClientProperty(
         FlatClientProperties.PLACEHOLDER_TEXT, PatientListMessages.getString("search"));
     search.putClientProperty(FlatClientProperties.TEXT_FIELD_SHOW_CLEAR_BUTTON, true);
     search.getDocument().addDocumentListener(new FilterOnEdit());
     count.putClientProperty(FlatClientProperties.STYLE_CLASS, "small"); // NON-NLS
+    watched.putClientProperty(FlatClientProperties.STYLE_CLASS, "small"); // NON-NLS
 
     list.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
-    list.setCellRenderer(new PatientRenderer());
+    list.setCellRenderer(new RowRenderer());
     list.addListSelectionListener(
         e -> {
           if (!e.getValueIsAdjusting() && !adjusting) {
-            openSelected();
+            onSelection();
           }
         });
 
@@ -88,22 +118,54 @@ public class PatientListPanel extends JPanel
     add(search, "growx"); // NON-NLS
     add(count, "newline, growx"); // NON-NLS
     add(scroll, "newline, grow, height 160lp:360lp:"); // NON-NLS
+    add(watched, "newline, growx, hidemode 3"); // NON-NLS
 
+    refreshLater.setRepeats(false);
     source.addListDataListener(new RefreshOnChange());
+    explorer
+        .getDataExplorerModel()
+        .addPropertyChangeListener(
+            evt -> {
+              if (evt instanceof ObservableEvent event
+                  && switch (event.getActionCommand()) {
+                    case ADD, REMOVE, UPDATE, LOADING_STOP -> true;
+                    default -> false;
+                  }) {
+                GuiExecutor.execute(refreshLater::restart);
+              }
+            });
     refresh();
   }
 
-  private void openSelected() {
-    MediaSeriesGroup patient = list.getSelectedValue();
-    if (patient == null) {
+  /** A header cannot be opened: move on to the visit next to it, in the direction of travel. */
+  private void onSelection() {
+    int index = list.getSelectedIndex();
+    if (index >= 0 && shown.get(index) instanceof DayRow) {
+      int next = index >= lastIndex ? index + 1 : index - 1;
+      if (next < 0 || next >= shown.size()) {
+        next = index + 1 < shown.size() ? index + 1 : -1;
+      }
+      if (next >= 0) {
+        list.setSelectedIndex(next); // Fires again with the visit
+        list.ensureIndexIsVisible(next);
+      } else {
+        list.clearSelection();
+      }
       return;
     }
-    explorer.selectPatient(patient);
+    lastIndex = index;
+    if (index >= 0 && shown.get(index) instanceof VisitRow visit) {
+      open(visit);
+    }
+  }
+
+  private void open(VisitRow visit) {
+    explorer.selectPatient(visit.patient());
     DicomModel model = explorer.getDataExplorerModel();
-    firstSeries(model, patient)
+    firstSeries(model, visit.study())
         .ifPresent(
             series -> {
-              // One viewer at a time: the picked patient replaces the previous one
+              // One viewer at a time: the picked visit replaces the previous one
               List<ViewerPlugin<?>> open =
                   new ArrayList<>(GuiUtils.getUICore().getViewerPlugins());
               if (!open.isEmpty()) {
@@ -113,69 +175,118 @@ public class PatientListPanel extends JPanel
             });
   }
 
-  /** First displayable series of the patient, in the explorer's study and series order. */
-  static Optional<DicomSeries> firstSeries(DicomModel model, MediaSeriesGroup patient) {
-    List<MediaSeriesGroup> studies = new ArrayList<>(model.getChildren(patient));
-    studies.sort(DicomSorter.STUDY_COMPARATOR);
-    for (MediaSeriesGroup study : studies) {
-      List<MediaSeriesGroup> series = new ArrayList<>(model.getChildren(study));
-      series.sort(DicomSorter.SERIES_COMPARATOR);
-      for (MediaSeriesGroup s : series) {
-        if (s instanceof DicomSeries dicomSeries && !DicomModel.isHiddenModality(dicomSeries)) {
-          return Optional.of(dicomSeries);
-        }
+  /** First displayable series of the study, in the explorer's series order. */
+  static Optional<DicomSeries> firstSeries(DicomModel model, MediaSeriesGroup study) {
+    List<MediaSeriesGroup> series = new ArrayList<>(model.getChildren(study));
+    series.sort(DicomSorter.SERIES_COMPARATOR);
+    for (MediaSeriesGroup s : series) {
+      if (s instanceof DicomSeries dicomSeries && !DicomModel.isHiddenModality(dicomSeries)) {
+        return Optional.of(dicomSeries);
       }
     }
     return Optional.empty();
   }
 
-  private void refresh() {
-    MediaSeriesGroup selected = list.getSelectedValue();
-    String query = search.getText().strip().toLowerCase(Locale.ROOT);
-    List<MediaSeriesGroup> matches = new ArrayList<>();
+  /** Sorts the visits, most recent day first and by time within a day, under day headers. */
+  static List<Row> buildRows(List<VisitRow> visits) {
+    List<VisitRow> sorted = new ArrayList<>(visits);
+    sorted.sort(VISIT_ORDER);
+    List<Row> rows = new ArrayList<>();
+    int i = 0;
+    while (i < sorted.size()) {
+      LocalDate day = sorted.get(i).date();
+      int end = i;
+      while (end < sorted.size() && Objects.equals(sorted.get(end).date(), day)) {
+        end++;
+      }
+      rows.add(new DayRow(day, end - i));
+      rows.addAll(sorted.subList(i, end));
+      i = end;
+    }
+    return rows;
+  }
+
+  private List<VisitRow> collectVisits(String query) {
+    DicomModel model = explorer.getDataExplorerModel();
+    List<VisitRow> visits = new ArrayList<>();
     for (int i = 0; i < source.getSize(); i++) {
       if (source.getElementAt(i) instanceof MediaSeriesGroup patient
           && (query.isEmpty() || patient.toString().toLowerCase(Locale.ROOT).contains(query))) {
-        matches.add(patient);
+        for (MediaSeriesGroup study : model.getChildren(patient)) {
+          visits.add(
+              new VisitRow(
+                  patient,
+                  study,
+                  TagD.getTagValue(study, Tag.StudyDate, LocalDate.class),
+                  TagD.getTagValue(study, Tag.StudyTime, LocalTime.class)));
+        }
       }
     }
+    return visits;
+  }
+
+  private void refresh() {
+    Row selected = list.getSelectedValue();
+    String query = search.getText().strip().toLowerCase(Locale.ROOT);
+    List<VisitRow> visits = collectVisits(query);
+    List<Row> rows = buildRows(visits);
     adjusting = true;
     try {
       shown.clear();
-      shown.addAll(matches);
-      if (selected != null && shown.contains(selected)) {
-        list.setSelectedValue(selected, true);
+      shown.addAll(rows);
+      int index = selected instanceof VisitRow v ? indexOfStudy(v.study()) : -1;
+      if (index >= 0) {
+        list.setSelectedIndex(index);
+        lastIndex = index;
       }
     } finally {
       adjusting = false;
     }
+    int total = query.isEmpty() ? visits.size() : collectVisits("").size();
     count.setText(
-        PatientListMessages.format("count", shown.getSize(), countPatients())); // NON-NLS
+        query.isEmpty()
+            ? PatientListMessages.format("count.all", total)
+            : PatientListMessages.format("count", visits.size(), total));
+    Optional<String> folder = FolderWatcher.getWatchedFolder().map(Object::toString);
+    watched.setVisible(folder.isPresent());
+    folder.ifPresent(
+        f -> {
+          watched.setText(PatientListMessages.format("watching", f));
+          watched.setToolTipText(f);
+        });
   }
 
-  private int countPatients() {
-    int n = 0;
-    for (int i = 0; i < source.getSize(); i++) {
-      if (source.getElementAt(i) instanceof MediaSeriesGroup) {
-        n++;
+  private int indexOfStudy(MediaSeriesGroup study) {
+    for (int i = 0; i < shown.size(); i++) {
+      if (shown.get(i) instanceof VisitRow v && v.study() == study) {
+        return i;
       }
     }
-    return n;
+    return -1;
   }
 
-  /** Moves keyboard focus to the list, so that the arrow keys walk through the patients. */
+  /** Moves keyboard focus to the list, so that the arrow keys walk through the visits. */
   public void focusList() {
     list.requestFocusInWindow();
   }
 
   @Override
   public void patientSelected(MediaSeriesGroup patient) {
-    if (patient != null && patient != list.getSelectedValue() && shown.contains(patient)) {
-      adjusting = true;
-      try {
-        list.setSelectedValue(patient, true);
-      } finally {
-        adjusting = false;
+    if (patient == null
+        || list.getSelectedValue() instanceof VisitRow v && v.patient() == patient) {
+      return;
+    }
+    for (int i = 0; i < shown.size(); i++) {
+      if (shown.get(i) instanceof VisitRow v && v.patient() == patient) {
+        adjusting = true;
+        try {
+          list.setSelectedIndex(i);
+          list.ensureIndexIsVisible(i);
+          lastIndex = i;
+        } finally {
+          adjusting = false;
+        }
+        return;
       }
     }
   }
@@ -190,66 +301,93 @@ public class PatientListPanel extends JPanel
     }
   }
 
-  private String details(MediaSeriesGroup patient) {
+  private static String titleOf(LocalDate date) {
+    if (date == null) {
+      return PatientListMessages.getString("day.none");
+    }
+    String formatted = date.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.SHORT));
+    LocalDate today = LocalDate.now();
+    if (date.equals(today)) {
+      return PatientListMessages.format("day.today", formatted);
+    }
+    if (date.equals(today.minusDays(1))) {
+      return PatientListMessages.format("day.yesterday", formatted);
+    }
+    String weekday =
+        date.format(DateTimeFormatter.ofPattern("EEEE", Locale.getDefault())); // NON-NLS
+    return Character.toUpperCase(weekday.charAt(0)) + weekday.substring(1) + " · " + formatted;
+  }
+
+  private static String details(VisitRow visit) {
     StringJoiner line = new StringJoiner("  ·  "); // NON-NLS
-    birthDate(patient).ifPresent(d -> line.add(PatientListMessages.format("born", formatDate(d))));
-    String sex = TagD.getTagValue(patient, Tag.PatientSex, String.class);
+    if (visit.time() != null) {
+      line.add(visit.time().format(DateTimeFormatter.ofPattern("HH:mm"))); // NON-NLS
+    }
+    LocalDate birth = TagD.getTagValue(visit.patient(), Tag.PatientBirthDate, LocalDate.class);
+    if (birth != null) {
+      // Screening systems often know the birth year only and store it as January 1st
+      line.add(
+          birth.getDayOfYear() == 1
+              ? PatientListMessages.format("born.year", String.valueOf(birth.getYear()))
+              : PatientListMessages.format(
+                  "born", birth.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.SHORT))));
+    }
+    String sex = TagD.getTagValue(visit.patient(), Tag.PatientSex, String.class);
     if (sex != null && !sex.isBlank()) {
       line.add(PatientListMessages.getString("sex." + sex.strip().toUpperCase(Locale.ROOT)));
     }
-    latestStudyDate(patient).ifPresent(d -> line.add(formatDate(d)));
     return line.toString();
   }
 
-  private static Optional<LocalDate> birthDate(MediaSeriesGroup patient) {
-    return Optional.ofNullable(TagD.getTagValue(patient, Tag.PatientBirthDate, LocalDate.class));
-  }
-
-  private Optional<LocalDate> latestStudyDate(MediaSeriesGroup patient) {
-    DicomModel model = explorer.getDataExplorerModel();
-    LocalDate latest = null;
-    for (MediaSeriesGroup study : model.getChildren(patient)) {
-      LocalDate date = TagD.getTagValue(study, Tag.StudyDate, LocalDate.class);
-      if (date != null && (latest == null || date.isAfter(latest))) {
-        latest = date;
-      }
-    }
-    return Optional.ofNullable(latest);
-  }
-
-  private static String formatDate(LocalDate date) {
-    return date.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.SHORT));
-  }
-
-  private class PatientRenderer implements ListCellRenderer<MediaSeriesGroup> {
-    private final JPanel cell = new JPanel(new BorderLayout(0, 1));
+  private static class RowRenderer implements ListCellRenderer<Row> {
+    private final JPanel visitCell = new JPanel(new BorderLayout(0, 1));
     private final JLabel name = new JLabel();
     private final JLabel info = new JLabel();
+    private final JPanel dayCell = new JPanel(new BorderLayout(8, 0));
+    private final JLabel dayTitle = new JLabel();
+    private final JLabel dayCount = new JLabel();
 
-    PatientRenderer() {
-      cell.setBorder(BorderFactory.createEmptyBorder(4, 6, 4, 6));
+    RowRenderer() {
+      visitCell.setBorder(BorderFactory.createEmptyBorder(4, 14, 4, 6));
       name.setFont(name.getFont().deriveFont(Font.BOLD, name.getFont().getSize2D() + 1f));
       info.putClientProperty(FlatClientProperties.STYLE_CLASS, "small"); // NON-NLS
-      cell.add(name, BorderLayout.NORTH);
-      cell.add(info, BorderLayout.SOUTH);
+      visitCell.add(name, BorderLayout.NORTH);
+      visitCell.add(info, BorderLayout.SOUTH);
+
+      dayCell.setBorder(
+          BorderFactory.createCompoundBorder(
+              BorderFactory.createMatteBorder(
+                  1, 0, 1, 0, UIManager.getColor("Component.borderColor")),
+              BorderFactory.createEmptyBorder(5, 6, 5, 8)));
+      dayTitle.setFont(dayTitle.getFont().deriveFont(Font.BOLD));
+      dayCount.setFont(dayCount.getFont().deriveFont(Font.BOLD));
+      dayCell.add(dayTitle, BorderLayout.CENTER);
+      dayCell.add(dayCount, BorderLayout.EAST);
     }
 
     @Override
     public Component getListCellRendererComponent(
-        JList<? extends MediaSeriesGroup> jList,
-        MediaSeriesGroup patient,
-        int index,
-        boolean isSelected,
-        boolean cellHasFocus) {
-      name.setText(patient.toString());
-      info.setText(details(patient));
-      cell.setBackground(isSelected ? jList.getSelectionBackground() : jList.getBackground());
+        JList<? extends Row> jList, Row row, int index, boolean isSelected, boolean hasFocus) {
+      if (row instanceof DayRow day) {
+        Color accent = UIManager.getColor("Component.accentColor");
+        Color header = UIManager.getColor("TableHeader.background");
+        dayCell.setBackground(header != null ? header : jList.getBackground());
+        dayTitle.setForeground(accent != null ? accent : jList.getForeground());
+        dayCount.setForeground(accent != null ? accent : jList.getForeground());
+        dayTitle.setText(titleOf(day.date()));
+        dayCount.setText(String.valueOf(day.visits()));
+        return dayCell;
+      }
+      VisitRow visit = (VisitRow) row;
+      name.setText(visit.patient().toString());
+      info.setText(details(visit));
+      visitCell.setBackground(isSelected ? jList.getSelectionBackground() : jList.getBackground());
       name.setForeground(isSelected ? jList.getSelectionForeground() : jList.getForeground());
       info.setForeground(
           isSelected
               ? jList.getSelectionForeground()
               : UIManager.getColor("Label.disabledForeground"));
-      return cell;
+      return visitCell;
     }
   }
 
@@ -273,17 +411,17 @@ public class PatientListPanel extends JPanel
   private class RefreshOnChange implements ListDataListener {
     @Override
     public void intervalAdded(ListDataEvent e) {
-      refresh();
+      refreshLater.restart();
     }
 
     @Override
     public void intervalRemoved(ListDataEvent e) {
-      refresh();
+      refreshLater.restart();
     }
 
     @Override
     public void contentsChanged(ListDataEvent e) {
-      refresh();
+      refreshLater.restart();
     }
   }
 }
