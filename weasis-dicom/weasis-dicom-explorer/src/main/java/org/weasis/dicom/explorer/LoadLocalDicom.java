@@ -101,6 +101,9 @@ public class LoadLocalDicom extends LoadDicom {
     this.recursive = recursive;
     this.cacheNetworkFiles =
         GuiUtils.getUICore().getSystemPreferences().getBooleanProperty(NETWORK_CACHE, true);
+    if (files.length == 1 && FolderWatcher.isEnabled() && files[0].isDirectory()) {
+      FolderWatcher.watchImported(files[0]);
+    }
   }
 
   @Override

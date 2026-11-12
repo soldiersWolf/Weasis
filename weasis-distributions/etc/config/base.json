@@ -451,6 +451,22 @@
       "category": "DICOM"
     },
     {
+      "code": "weasis.dicom.folder.watch",
+      "value": "true",
+      "description": "If true, the last imported folder is remembered: its recent files are loaded at start up and new files, also in new sub-folders, are loaded as they appear",
+      "type": "F",
+      "javaType": "BOOLEAN",
+      "category": "DICOM"
+    },
+    {
+      "code": "weasis.dicom.folder.watch.days",
+      "value": "7",
+      "description": "Number of days back that the watched folder is loaded at start up and that its sub-folders are scanned for new files",
+      "type": "F",
+      "javaType": "INT",
+      "category": "DICOM"
+    },
+    {
       "code": "weasis.dicom.explorer.patient.list",
       "value": "true",
       "description": "If true, the DICOM explorer shows every patient in a searchable list (one click or the arrow keys open the images) instead of the patient combo box and the series filter",

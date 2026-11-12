@@ -58,6 +58,7 @@ import org.weasis.core.ui.util.TitleMenuItem;
 import org.weasis.core.util.StringUtil;
 import org.weasis.dicom.codec.*;
 import org.weasis.dicom.explorer.*;
+import org.weasis.dicom.explorer.FolderWatcher;
 import org.weasis.dicom.explorer.HangingProtocols.OpeningViewer;
 import org.weasis.dicom.explorer.Messages;
 import org.weasis.dicom.explorer.exp.ExplorerTask;
@@ -185,6 +186,7 @@ public class DicomExplorer extends PluginTool
     setupFilterBar();
     setupThumbnailView();
     this.model.addPropertyChangeListener(this);
+    FolderWatcher.start(this.model);
   }
 
   @Override
