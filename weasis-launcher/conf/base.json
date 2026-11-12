@@ -606,7 +606,7 @@
     },
     {
       "code": "weasis.import.dicom.qr",
-      "value": "true",
+      "value": "false",
       "description": "Show the DICOM Q/R page in the DICOM Export dialog",
       "type": "A",
       "javaType": "BOOLEAN",
