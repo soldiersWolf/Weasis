@@ -10,6 +10,8 @@
 package org.weasis.dicom.explorer.imp;
 
 import java.awt.Dimension;
+import java.awt.GraphicsEnvironment;
+import java.awt.Rectangle;
 import java.awt.FlowLayout;
 import java.awt.Window;
 import java.util.ArrayList;
@@ -35,13 +37,29 @@ public class DicomImport extends AbstractWizardDialog {
   private boolean cancelVeto = false;
   private final DicomModel dicomModel;
 
+  /**
+   * Size of the pages: large enough for the download page and its result tables, within most of
+   * the screen, in unscaled pixels like the other dialogs.
+   */
+  private static Dimension pageSize() {
+    int width = 1240;
+    int height = 720;
+    if (!GraphicsEnvironment.isHeadless()) {
+      Rectangle screen = GraphicsEnvironment.getLocalGraphicsEnvironment().getMaximumWindowBounds();
+      float scale = Math.max(1f, GuiUtils.getScaleLength(1000) / 1000f);
+      // Room for the page list on the left and the buttons at the bottom
+      width = Math.min(width, Math.round(screen.width * 0.92f / scale) - 220);
+      height = Math.min(height, Math.round(screen.height * 0.88f / scale) - 120);
+    }
+    return new Dimension(Math.max(760, width), Math.max(520, height));
+  }
+
   public DicomImport(Window parent, final DicomModel dicomModel) {
     super(
         parent,
         Messages.getString("DicomImport.imp_dicom"),
         ModalityType.APPLICATION_MODAL,
-        // Large enough for the download window and its result table
-        new Dimension(980, 680));
+        pageSize());
     this.dicomModel = dicomModel;
 
     JButton importAndClose = new JButton(Messages.getString("DicomImport.impAndClose0"));
