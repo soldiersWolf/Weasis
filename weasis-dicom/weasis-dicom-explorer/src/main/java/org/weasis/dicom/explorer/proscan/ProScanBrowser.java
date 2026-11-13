@@ -82,6 +82,7 @@ public final class ProScanBrowser extends JDialog {
   private final JComboBox<Period> period = new JComboBox<>(Period.values());
   private final JTextField name = new JTextField(14);
   private final JButton find = new JButton(ProScanMessages.getString("browse.find"));
+  private final JButton export = new JButton(ProScanMessages.getString("export.open"));
   private final JLabel count = new JLabel();
   private final Rows rows = new Rows();
   private final JTable table = new JTable(rows);
@@ -103,11 +104,17 @@ public final class ProScanBrowser extends JDialog {
     find.addActionListener(_ -> search());
     count.putClientProperty(FlatClientProperties.STYLE_CLASS, "small"); // NON-NLS
 
-    JPanel top = new JPanel(new MigLayout("ins 8 8 4 8, fillx", "[][][]push[]")); // NON-NLS
+    export.addActionListener(
+        _ -> {
+          LocalDate[] days = periodDays();
+          ProScanExportDialog.open(this, days[0], days[1]);
+        });
+    JPanel top = new JPanel(new MigLayout("ins 8 8 4 8, fillx", "[][][][]push[]")); // NON-NLS
     top.add(period);
     top.add(name, "growx"); // NON-NLS
     top.add(find);
-    top.add(count);
+    top.add(count, "gapleft 12"); // NON-NLS
+    top.add(export);
 
     table.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
     table.setAutoCreateRowSorter(true);
@@ -180,14 +187,18 @@ public final class ProScanBrowser extends JDialog {
     instance.search();
   }
 
-  private void search() {
+  /** First and last day of the chosen period. */
+  private LocalDate[] periodDays() {
     Period p = (Period) period.getSelectedItem();
     LocalDate to = LocalDate.now();
     LocalDate from = to.minusDays(p == null ? 6 : p.days);
-    if (p == Period.YESTERDAY) {
-      to = from;
-    }
-    LocalDate end = to;
+    return new LocalDate[] {from, p == Period.YESTERDAY ? from : to};
+  }
+
+  private void search() {
+    LocalDate[] days = periodDays();
+    LocalDate from = days[0];
+    LocalDate end = days[1];
     String lastName = name.getText();
     find.setEnabled(false);
     count.setText(ProScanMessages.getString("status.loading"));

@@ -69,7 +69,9 @@ try {
       }
       'browse' {
         # Jet needs the parentheses around each join
-        $sql = 'SELECT TOP 3000 f.ID, f.[Date], f.[Time], p.LastName, p.FirstName, ' +
+        $limit = 3000
+        if (Get-Arg 'PROSCAN_LIMIT') { $limit = [int](Get-Arg 'PROSCAN_LIMIT') }
+        $sql = 'SELECT TOP ' + $limit + ' f.ID, f.[Date], f.[Time], p.LastName, p.FirstName, ' +
           'p.MidleName, p.DOB, f.FileName, d.FIO, g.DiagnosName, f.Description ' +
           'FROM ((FluorTab AS f LEFT JOIN Patients AS p ON f.PatientID = p.ID) ' +
           'LEFT JOIN DoctorsSPR AS d ON f.DoctorID = d.ID) ' +

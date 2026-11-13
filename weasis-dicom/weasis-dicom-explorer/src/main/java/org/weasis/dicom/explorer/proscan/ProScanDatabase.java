@@ -158,7 +158,14 @@ public final class ProScanDatabase {
    */
   public List<Row> browse(Path db, LocalDate from, LocalDate to, String lastName)
       throws IOException {
+    return browse(db, from, to, lastName, 3000);
+  }
+
+  /** Like {@link #browse(Path, LocalDate, LocalDate, String)}, with a maximum number of images. */
+  public List<Row> browse(Path db, LocalDate from, LocalDate to, String lastName, int limit)
+      throws IOException {
     Map<String, String> args = args("browse", db, null); // NON-NLS
+    args.put("PROSCAN_LIMIT", String.valueOf(Math.max(1, limit))); // NON-NLS
     args.put("PROSCAN_FROM", from.toString()); // NON-NLS
     args.put("PROSCAN_TO", to.plusDays(1).toString()); // NON-NLS
     if (lastName != null && !lastName.isBlank()) {

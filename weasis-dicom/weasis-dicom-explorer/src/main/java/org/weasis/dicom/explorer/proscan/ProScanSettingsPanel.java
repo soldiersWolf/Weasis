@@ -9,27 +9,14 @@
  */
 package org.weasis.dicom.explorer.proscan;
 
-import com.formdev.flatlaf.FlatClientProperties;
-import java.awt.Color;
-import java.awt.Component;
-import java.io.File;
 import java.nio.file.Path;
-import java.time.ZoneId;
-import java.time.format.DateTimeFormatter;
-import java.time.format.FormatStyle;
+import java.time.LocalDate;
 import java.util.Optional;
 import javax.swing.BorderFactory;
-import javax.swing.DefaultListCellRenderer;
 import javax.swing.JButton;
-import javax.swing.JCheckBox;
-import javax.swing.JComboBox;
 import javax.swing.JFileChooser;
 import javax.swing.JLabel;
-import javax.swing.JList;
 import javax.swing.JPanel;
-import javax.swing.JSpinner;
-import javax.swing.SpinnerNumberModel;
-import javax.swing.UIManager;
 import javax.swing.filechooser.FileNameExtensionFilter;
 import net.miginfocom.swing.MigLayout;
 import org.weasis.core.api.gui.util.GuiExecutor;
@@ -37,15 +24,12 @@ import org.weasis.dicom.explorer.FolderWatcher;
 import org.weasis.dicom.explorer.LocalPersistence;
 
 /**
- * Preferences of the ProScan database: where it is, a button to browse it, and its automatic zip
- * copies. Every change is saved at once.
+ * Preferences of the ProScan database: where it is, and the buttons to browse it and to save a
+ * copy of a period. Every change is saved at once.
  */
 public class ProScanSettingsPanel extends JPanel {
 
   private final JLabel databaseLabel = new JLabel();
-  private final JLabel folderLabel = new JLabel();
-  private final JLabel status = new JLabel();
-  private final JButton backupNow = new JButton(ProScanMessages.getString("backup.now"));
 
   public ProScanSettingsPanel() {
     setLayout(new MigLayout("fillx, ins 6, gap 6 6", "[][grow,fill][][]", "")); // NON-NLS
@@ -67,70 +51,14 @@ public class ProScanSettingsPanel extends JPanel {
 
     JButton browse = new JButton(ProScanMessages.getString("settings.browse"));
     browse.addActionListener(_ -> ProScanBrowser.open(this));
-    add(browse, "skip, span, wrap"); // NON-NLS
+    JButton export = new JButton(ProScanMessages.getString("export.open"));
+    export.addActionListener(
+        _ -> ProScanExportDialog.open(this, LocalDate.now().minusDays(6), LocalDate.now()));
+    add(browse, "skip, span, split 2"); // NON-NLS
+    add(export, "wrap"); // NON-NLS
 
-    JCheckBox enabled =
-        new JCheckBox(ProScanMessages.getString("backup.enabled"), ProScanBackup.isEnabled());
-    enabled.addActionListener(
-        _ -> {
-          LocalPersistence.getProperties()
-              .putBooleanProperty(ProScanBackup.P_ENABLED, enabled.isSelected());
-          ProScanBackup.start();
-        });
-    JComboBox<Integer> every = new JComboBox<>(ProScanBackup.INTERVALS.toArray(Integer[]::new));
-    every.setRenderer(
-        new DefaultListCellRenderer() {
-          @Override
-          public Component getListCellRendererComponent(
-              JList<?> list,
-              Object value,
-              int index,
-              boolean isSelected,
-              boolean cellHasFocus) {
-            super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
-            setText(ProScanMessages.getString("backup.every." + value));
-            return this;
-          }
-        });
-    every.setSelectedItem(ProScanBackup.getHours());
-    every.addActionListener(
-        _ ->
-            LocalPersistence.getProperties()
-                .putIntProperty(ProScanBackup.P_HOURS, (Integer) every.getSelectedItem()));
-    JSpinner keep = new JSpinner(new SpinnerNumberModel(ProScanBackup.getKeep(), 1, 1000, 1));
-    keep.addChangeListener(
-        _ ->
-            LocalPersistence.getProperties()
-                .putIntProperty(ProScanBackup.P_KEEP, (Integer) keep.getValue()));
-    JPanel schedule = new JPanel(new MigLayout("ins 0, gap 6")); // NON-NLS
-    schedule.add(enabled);
-    schedule.add(every);
-    schedule.add(new JLabel(ProScanMessages.getString("backup.keep")), "gapleft 12"); // NON-NLS
-    schedule.add(keep);
-    schedule.add(new JLabel(ProScanMessages.getString("backup.copies")));
-    add(schedule, "newline, span, wrap"); // NON-NLS
-
-    JButton chooseFolder = new JButton(ProScanMessages.getString("settings.choose"));
-    chooseFolder.addActionListener(_ -> chooseFolder());
-    add(new JLabel(ProScanMessages.getString("backup.folder")));
-    add(folderLabel, "wmin 0"); // NON-NLS
-    add(chooseFolder, "wrap"); // NON-NLS
-
-    JLabel hint = new JLabel(ProScanMessages.getString("backup.hint"));
-    hint.putClientProperty(FlatClientProperties.STYLE_CLASS, "small"); // NON-NLS
-    hint.setForeground(UIManager.getColor("Label.disabledForeground"));
-    add(hint, "skip, span, wmin 0, wrap"); // NON-NLS
-
-    backupNow.addActionListener(_ -> runBackup());
-    status.putClientProperty(FlatClientProperties.STYLE_CLASS, "small"); // NON-NLS
-    add(backupNow, "skip, split 2, span"); // NON-NLS
-    add(status, "growx, wmin 0"); // NON-NLS
-
-    ProScanBackup.addChangeListener(() -> GuiExecutor.execute(this::refreshStatus));
     FolderWatcher.addChangeListener(() -> GuiExecutor.execute(this::refreshDatabase));
     refreshDatabase();
-    refreshFolder();
-    refreshStatus();
   }
 
   private void chooseDatabase() {
@@ -141,17 +69,6 @@ public class ProScanSettingsPanel extends JPanel {
       LocalPersistence.getProperties()
           .setProperty(ProScanDatabase.P_DATABASE, chooser.getSelectedFile().getPath());
       refreshDatabase();
-    }
-  }
-
-  private void chooseFolder() {
-    JFileChooser chooser = new JFileChooser();
-    chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
-    chooser.setDialogTitle(ProScanMessages.getString("backup.folder"));
-    if (chooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
-      File folder = chooser.getSelectedFile();
-      LocalPersistence.getProperties().setProperty(ProScanBackup.P_FOLDER, folder.getPath());
-      refreshFolder();
     }
   }
 
@@ -169,50 +86,5 @@ public class ProScanSettingsPanel extends JPanel {
                 databaseLabel.setToolTipText(databaseLabel.getText());
               });
         });
-  }
-
-  private void refreshFolder() {
-    folderLabel.setText(
-        ProScanBackup.getFolder()
-            .map(Path::toString)
-            .orElse(ProScanMessages.getString("backup.folder.none")));
-    folderLabel.setToolTipText(folderLabel.getText());
-  }
-
-  private void runBackup() {
-    backupNow.setEnabled(false);
-    status.setText(ProScanMessages.getString("backup.running"));
-    status.setForeground(UIManager.getColor("Label.disabledForeground"));
-    Thread.ofVirtual()
-        .name("ProScan backup now") // NON-NLS
-        .start(
-            () -> {
-              ProScanBackup.backupNow();
-              GuiExecutor.execute(() -> backupNow.setEnabled(true));
-            });
-  }
-
-  private void refreshStatus() {
-    Optional<ProScanBackup.Status> last = ProScanBackup.lastStatus();
-    if (last.isEmpty()) {
-      status.setText("");
-      return;
-    }
-    ProScanBackup.Status s = last.get();
-    String time =
-        s.at()
-            .atZone(ZoneId.systemDefault())
-            .format(DateTimeFormatter.ofLocalizedDateTime(FormatStyle.SHORT));
-    if (s.error() != null) {
-      status.setText(ProScanMessages.format("backup.failed", time, s.error()));
-      Color error = UIManager.getColor("Component.error.focusedBorderColor");
-      status.setForeground(error != null ? error : Color.RED);
-    } else {
-      status.setText(
-          ProScanMessages.format(
-              "backup.done", time, s.file().getFileName(), String.format("%.1f", s.size() / 1e6)));
-      status.setForeground(UIManager.getColor("Label.disabledForeground"));
-    }
-    status.setToolTipText(s.error() != null ? s.error() : String.valueOf(s.file()));
   }
 }

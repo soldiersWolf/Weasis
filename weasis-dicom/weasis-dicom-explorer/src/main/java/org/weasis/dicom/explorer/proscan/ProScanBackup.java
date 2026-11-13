@@ -10,176 +10,193 @@
 package org.weasis.dicom.explorer.proscan;
 
 import java.io.IOException;
+import java.io.InterruptedIOException;
 import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.FileTime;
-import java.time.Duration;
-import java.time.Instant;
-import java.time.LocalDateTime;
+import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeFormatterBuilder;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
-import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
+import java.util.function.BooleanSupplier;
 import java.util.stream.Stream;
+import java.util.zip.Deflater;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.weasis.core.api.service.WProperties;
-import org.weasis.core.api.util.ThreadUtil;
-import org.weasis.dicom.explorer.FolderWatcher;
-import org.weasis.dicom.explorer.LocalPersistence;
+import org.weasis.dicom.explorer.proscan.ProScanDatabase.Row;
 
 /**
- * Zip copies of the shared ProScan database, made at a chosen interval while Weasis runs, keeping
- * the most recent ones. The settings belong to this computer, so that a single computer of the
- * hospital makes the copies.
+ * Zip copy of a period chosen by the user: the daily image folders of the period, the database
+ * that ProScan and its viewer need to open them, and a table of the reports readable in Excel.
  */
 public final class ProScanBackup {
   private static final Logger LOGGER = LoggerFactory.getLogger(ProScanBackup.class);
 
-  public static final String P_ENABLED = "proscan.backup.enabled"; // NON-NLS
-  public static final String P_HOURS = "proscan.backup.hours"; // NON-NLS
-  public static final String P_FOLDER = "proscan.backup.folder"; // NON-NLS
-  public static final String P_KEEP = "proscan.backup.keep"; // NON-NLS
-  private static final String P_LAST = "proscan.backup.last"; // NON-NLS
+  /** What the copy holds. */
+  public record Content(boolean images, boolean database, boolean reports) {}
 
-  /** Intervals offered, in hours: every hour, 4 hours, 12 hours, day, week. */
-  public static final List<Integer> INTERVALS = List.of(1, 4, 12, 24, 168);
+  /** Progress of a copy: files written out of the total. */
+  public interface Progress {
+    void update(int done, int total);
+  }
 
-  static final String PREFIX = "proscan_"; // NON-NLS
-  private static final DateTimeFormatter NAME_TIME =
-      DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm"); // NON-NLS
+  static final String REPORTS_NAME = "reports.csv"; // NON-NLS
   private static final int COPY_ATTEMPTS = 3;
-
-  /** Outcome of the last copy: the zip and its size, or the error. */
-  public record Status(Instant at, Path file, long size, String error) {}
-
-  private static final List<Runnable> LISTENERS = new CopyOnWriteArrayList<>();
-  private static ScheduledExecutorService scheduler;
-  private static volatile Status last;
+  // ProScan names the daily folders 11-Nov-2026; other spellings are accepted as well
+  private static final List<DateTimeFormatter> DAY_NAMES =
+      Stream.of("dd-MMM-yyyy", "d-MMM-yyyy", "dd.MM.yyyy", "yyyy-MM-dd") // NON-NLS
+          .map(
+              p ->
+                  new DateTimeFormatterBuilder()
+                      .parseCaseInsensitive()
+                      .appendPattern(p)
+                      .toFormatter(Locale.ENGLISH))
+          .toList();
 
   private ProScanBackup() {}
 
-  /** Starts checking every few minutes whether a copy is due. */
-  public static synchronized void start() {
-    if (scheduler != null) {
-      return;
-    }
-    scheduler =
-        Executors.newSingleThreadScheduledExecutor(
-            ThreadUtil.namedDaemonThreadFactory("ProScan backup", true)); // NON-NLS
-    scheduler.scheduleWithFixedDelay(ProScanBackup::backupIfDue, 1, 5, TimeUnit.MINUTES);
+  /** Default name of the copy of a period. */
+  public static String defaultName(LocalDate from, LocalDate to) {
+    return from.equals(to)
+        ? "proscan_" + from + ".zip" // NON-NLS
+        : "proscan_" + from + "_" + to + ".zip"; // NON-NLS
   }
 
-  public static void addChangeListener(Runnable listener) {
-    LISTENERS.add(listener);
-  }
-
-  public static Optional<Status> lastStatus() {
-    return Optional.ofNullable(last);
-  }
-
-  private static WProperties prefs() {
-    return LocalPersistence.getProperties();
-  }
-
-  public static boolean isEnabled() {
-    return prefs().getBooleanProperty(P_ENABLED, false);
-  }
-
-  public static int getHours() {
-    return prefs().getIntProperty(P_HOURS, 24);
-  }
-
-  public static int getKeep() {
-    return prefs().getIntProperty(P_KEEP, 30);
-  }
-
-  public static Optional<Path> getFolder() {
-    String folder = prefs().getProperty(P_FOLDER, "");
-    return folder.isBlank() ? Optional.empty() : Optional.of(Path.of(folder));
-  }
-
-  private static void backupIfDue() {
-    try {
-      Instant previous = Instant.ofEpochMilli(prefs().getLongProperty(P_LAST, 0L));
-      if (isEnabled()
-          && getFolder().isPresent()
-          && isDue(previous, Instant.now(), getHours())) {
-        backupNow();
+  /** Date of a daily folder of ProScan, empty for any other folder. */
+  static Optional<LocalDate> dayOf(Path folder) {
+    String name = folder.getFileName() == null ? "" : folder.getFileName().toString();
+    for (DateTimeFormatter format : DAY_NAMES) {
+      try {
+        return Optional.of(LocalDate.parse(name, format));
+      } catch (DateTimeParseException e) {
+        // Try the next spelling
       }
-    } catch (RuntimeException e) {
-      LOGGER.error("ProScan backup", e);
     }
+    return Optional.empty();
   }
 
-  static boolean isDue(Instant previous, Instant now, int hours) {
-    return !now.isBefore(previous.plus(Duration.ofHours(Math.max(1, hours))));
-  }
-
-  /** Makes a copy now, whatever the schedule; blocks, never call it on the event thread. */
-  public static synchronized Status backupNow() {
-    Status status;
-    try {
-      Path db =
-          ProScanDatabase.sharedDatabase(FolderWatcher.getWatchedFolders())
-              .orElseThrow(() -> new IOException(ProScanMessages.getString("backup.nodb")));
-      Path folder =
-          getFolder()
-              .orElseThrow(() -> new IOException(ProScanMessages.getString("backup.nofolder")));
-      Path zip = zip(db, folder, LocalDateTime.now());
-      prune(folder, getKeep());
-      status = new Status(Instant.now(), zip, Files.size(zip), null);
-      prefs().putLongProperty(P_LAST, status.at().toEpochMilli());
-      LOGGER.info("ProScan database copied to {}", zip);
-    } catch (IOException | RuntimeException e) {
-      LOGGER.error("ProScan backup failed", e);
-      status = new Status(Instant.now(), null, 0, String.valueOf(e.getMessage()));
-    } catch (InterruptedException e) {
-      Thread.currentThread().interrupt();
-      status = new Status(Instant.now(), null, 0, String.valueOf(e.getMessage()));
+  /** The daily folders of the period, oldest first. */
+  static List<Path> dayFolders(Path root, LocalDate from, LocalDate to) throws IOException {
+    List<Path> days = new ArrayList<>();
+    try (Stream<Path> children = Files.list(root)) {
+      children
+          .filter(Files::isDirectory)
+          .filter(
+              d ->
+                  dayOf(d)
+                      .map(date -> !date.isBefore(from) && !date.isAfter(to))
+                      .orElse(false))
+          .forEach(days::add);
     }
-    last = status;
-    LISTENERS.forEach(Runnable::run);
-    return status;
+    days.sort(Comparator.comparing(d -> dayOf(d).orElseThrow()));
+    return days;
   }
 
   /**
-   * Zips the database into the folder. The database is in use, so it is first copied until a copy
-   * starts and ends with the same size and date, i.e. no write happened meanwhile; the zip is
-   * written under a temporary name and renamed once complete.
+   * Writes the copy of the period. The zip is written under a temporary name and renamed once
+   * complete, so that an interrupted copy never looks finished.
+   *
+   * @param reports the reports of the period, written as a table when the content asks for it
+   * @param workDir where the database is copied before being zipped
    */
-  static Path zip(Path db, Path folder, LocalDateTime now)
+  public static Path export(
+      Path db,
+      LocalDate from,
+      LocalDate to,
+      Content content,
+      List<Row> reports,
+      Path target,
+      Path workDir,
+      Progress progress,
+      BooleanSupplier cancelled)
       throws IOException, InterruptedException {
-    Files.createDirectories(folder);
-    Path snapshot = Files.createTempFile(folder, ".proscan-", ".tmp"); // NON-NLS
+    List<Path> images = new ArrayList<>();
+    if (content.images()) {
+      for (Path day : dayFolders(db.getParent(), from, to)) {
+        try (Stream<Path> files = Files.list(day)) {
+          files.filter(Files::isRegularFile)
+              .filter(f -> !f.getFileName().toString().equalsIgnoreCase(ProScanDatabase.FILE_NAME))
+              .sorted()
+              .forEach(images::add);
+        }
+      }
+    }
+    int total = images.size() + (content.database() ? 1 : 0) + (content.reports() ? 1 : 0);
+    int done = 0;
+    progress.update(done, total);
+
+    Path partial = target.resolveSibling(target.getFileName() + ".part"); // NON-NLS
     try {
-      FileTime modified = copyStable(db, snapshot);
-      Path target = folder.resolve(PREFIX + now.format(NAME_TIME) + ".zip"); // NON-NLS
-      Path partial = folder.resolve(target.getFileName() + ".part"); // NON-NLS
       try (OutputStream out = Files.newOutputStream(partial);
           ZipOutputStream zip = new ZipOutputStream(out)) {
-        ZipEntry entry = new ZipEntry(db.getFileName().toString());
-        entry.setLastModifiedTime(modified);
-        zip.putNextEntry(entry);
-        Files.copy(snapshot, zip);
-        zip.closeEntry();
+        // The images are JPEG 2000 already: compressing them again only costs time
+        zip.setLevel(Deflater.BEST_SPEED);
+        for (Path image : images) {
+          checkCancelled(cancelled);
+          ZipEntry entry =
+              new ZipEntry(image.getParent().getFileName() + "/" + image.getFileName());
+          entry.setLastModifiedTime(Files.getLastModifiedTime(image));
+          zip.putNextEntry(entry);
+          Files.copy(image, zip);
+          zip.closeEntry();
+          progress.update(++done, total);
+        }
+        zip.setLevel(Deflater.DEFAULT_COMPRESSION);
+        if (content.database()) {
+          checkCancelled(cancelled);
+          addDatabase(zip, db, workDir);
+          progress.update(++done, total);
+        }
+        if (content.reports()) {
+          zip.putNextEntry(new ZipEntry(REPORTS_NAME));
+          zip.write(toCsv(reports).getBytes(StandardCharsets.UTF_8));
+          zip.closeEntry();
+          progress.update(++done, total);
+        }
       }
       Files.move(partial, target, StandardCopyOption.REPLACE_EXISTING);
+      LOGGER.info("ProScan copy of {} to {} written to {}", from, to, target);
       return target;
+    } finally {
+      Files.deleteIfExists(partial);
+    }
+  }
+
+  private static void checkCancelled(BooleanSupplier cancelled) throws InterruptedIOException {
+    if (cancelled.getAsBoolean()) {
+      throw new InterruptedIOException();
+    }
+  }
+
+  private static void addDatabase(ZipOutputStream zip, Path db, Path workDir)
+      throws IOException, InterruptedException {
+    Path snapshot = Files.createTempFile(workDir, "proscan-", ".mdb"); // NON-NLS
+    try {
+      FileTime modified = copyStable(db, snapshot);
+      ZipEntry entry = new ZipEntry(db.getFileName().toString());
+      entry.setLastModifiedTime(modified);
+      zip.putNextEntry(entry);
+      Files.copy(snapshot, zip);
+      zip.closeEntry();
     } finally {
       Files.deleteIfExists(snapshot);
     }
   }
 
+  /**
+   * Copies the database, which ProScan may be writing, until a copy starts and ends with the same
+   * size and date.
+   */
   private static FileTime copyStable(Path db, Path snapshot)
       throws IOException, InterruptedException {
     for (int attempt = 1; ; attempt++) {
@@ -193,27 +210,51 @@ public final class ProScanBackup {
         LOGGER.warn("The ProScan database kept changing during its copy, kept the last one");
         return modified;
       }
-      // ProScan wrote during the copy: try again a little later
       Thread.sleep(5_000);
     }
   }
 
-  /** Deletes the oldest copies of the folder beyond the number to keep. */
-  static void prune(Path folder, int keep) throws IOException {
-    List<Path> copies = new ArrayList<>();
-    try (Stream<Path> files = Files.list(folder)) {
-      files
-          .filter(
-              f -> {
-                String name = f.getFileName().toString();
-                return name.startsWith(PREFIX) && name.endsWith(".zip"); // NON-NLS
-              })
-          .forEach(copies::add);
+  /**
+   * The reports as a table for Excel: UTF-8 with a byte order mark, so that Excel reads the
+   * Cyrillic letters, and semicolons, the separator of Excel with a Ukrainian or Russian locale.
+   */
+  static String toCsv(List<Row> rows) {
+    DateTimeFormatter day = DateTimeFormatter.ofPattern("dd.MM.yyyy"); // NON-NLS
+    DateTimeFormatter hour = DateTimeFormatter.ofPattern("HH:mm"); // NON-NLS
+    StringBuilder csv = new StringBuilder("﻿");
+    csv.append(
+        String.join(
+            ";",
+            Stream.of(
+                    "browse.col.date", // NON-NLS
+                    "browse.col.time", // NON-NLS
+                    "browse.col.patient", // NON-NLS
+                    "browse.col.birth", // NON-NLS
+                    "browse.col.doctor", // NON-NLS
+                    "browse.col.diagnosis", // NON-NLS
+                    "browse.col.description", // NON-NLS
+                    "browse.col.file") // NON-NLS
+                .map(k -> cell(ProScanMessages.getString(k)))
+                .toList()));
+    csv.append("\r\n");
+    for (Row r : rows) {
+      csv.append(
+          String.join(
+              ";",
+              cell(r.date() == null ? "" : r.date().format(day)),
+              cell(r.time() == null ? "" : r.time().format(hour)),
+              cell(r.patient()),
+              cell(r.birth() == null ? "" : r.birth().format(day)),
+              cell(r.doctor()),
+              cell(r.diagnosis()),
+              cell(r.description()),
+              cell(r.fileName())));
+      csv.append("\r\n");
     }
-    // The names hold the date, so their order is the order of the copies
-    copies.sort(Comparator.comparing((Path p) -> p.getFileName().toString()).reversed());
-    for (Path old : copies.subList(Math.min(Math.max(1, keep), copies.size()), copies.size())) {
-      Files.deleteIfExists(old);
-    }
+    return csv.toString();
+  }
+
+  private static String cell(String value) {
+    return "\"" + (value == null ? "" : value.replace("\"", "\"\"")) + "\"";
   }
 }
