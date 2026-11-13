@@ -46,6 +46,10 @@ public final class AppProperties {
   /** The name of the application (for display) */
   public static final String WEASIS_NAME = System.getProperty("weasis.name", "Weasis"); // NON-NLS
 
+  /** Title shown to the user, such as the window title; the name by default. */
+  public static final String WEASIS_TITLE =
+      System.getProperty("weasis.title", WEASIS_NAME); // NON-NLS
+
   /**
    * The current user of the application (defined either in the launch property "weasis.user" or by
    * the user of the operating system session if the property is null)

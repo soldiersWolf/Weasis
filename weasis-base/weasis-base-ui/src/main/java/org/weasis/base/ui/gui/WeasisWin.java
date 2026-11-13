@@ -1272,7 +1272,11 @@ public class WeasisWin {
   }
 
   private void updateTitle() {
-    String title = AppProperties.WEASIS_NAME + " v" + AppProperties.WEASIS_VERSION; // NON-NLS
+    // A custom title stands alone; the version stays in the About box
+    String title =
+        AppProperties.WEASIS_TITLE.equals(AppProperties.WEASIS_NAME)
+            ? AppProperties.WEASIS_NAME + " v" + AppProperties.WEASIS_VERSION // NON-NLS
+            : AppProperties.WEASIS_TITLE;
     if (IdentityMask.isSessionMasking()) {
       title += " — " + MaskingIndicator.label(IdentityMask.sessionProfile());
     }

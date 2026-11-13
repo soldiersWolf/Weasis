@@ -21,6 +21,7 @@ import java.awt.Window;
 import java.lang.reflect.InvocationTargetException;
 import java.nio.file.Path;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Properties;
 import javax.swing.BorderFactory;
 import javax.swing.Icon;
@@ -33,6 +34,7 @@ import javax.swing.SwingConstants;
 import javax.swing.UIManager;
 import org.osgi.framework.BundleContext;
 import org.slf4j.LoggerFactory;
+import org.weasis.pref.ConfigData;
 
 public class WeasisLoader {
   private static final org.slf4j.Logger LOGGER = LoggerFactory.getLogger(WeasisLoader.class);
@@ -92,9 +94,13 @@ public class WeasisLoader {
     cancelButton.addActionListener(evt -> closing());
 
     Icon icon = new FlatSVGIcon(resPath.resolve("svg/logo/WeasisAbout.svg").toUri());
+    String name = System.getProperty(ConfigData.P_WEASIS_NAME);
+    String title = System.getProperty(ConfigData.P_WEASIS_TITLE, name);
+    // A custom title is already written in its logo
     String text =
-        String.format(
-            Messages.getString("WebStartLoader.title"), System.getProperty("weasis.name"));
+        Objects.equals(title, name)
+            ? String.format(Messages.getString("WebStartLoader.title"), name)
+            : "";
     JLabel imagePane = new JLabel(text, icon, SwingConstants.CENTER);
     imagePane.setFont(UIManager.getFont("h3.font"));
     imagePane.setVerticalTextPosition(SwingConstants.TOP);

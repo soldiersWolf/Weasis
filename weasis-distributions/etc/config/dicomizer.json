@@ -38,6 +38,10 @@
       "value": "Weasis Dicomizer"
     },
     {
+      "code": "weasis.title",
+      "value": "Weasis Dicomizer"
+    },
+    {
       "code": "weasis.profile",
       "value": "dicomizer"
     },

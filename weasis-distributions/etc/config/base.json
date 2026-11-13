@@ -290,6 +290,13 @@
       "category": "LAUNCH"
     },
     {
+      "code": "weasis.title",
+      "value": "Програмне забезпечення для перегляду знімків",
+      "description": "Title of the main window, the name stays for files, DICOM and network",
+      "type": "AP",
+      "category": "LAUNCH"
+    },
+    {
       "code": "weasis.profile",
       "value": "default",
       "description": "Application profile: when no profile name is provided, the value is \"default\".\nIt allows having a custom preferences' directory on the client side (will not share preferences with other Weasis instances)",

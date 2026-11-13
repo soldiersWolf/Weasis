@@ -198,7 +198,7 @@ public class WeasisLauncher {
       loader.writeLabel(
           String.format(
               Messages.getString("WeasisLauncher.starting"),
-              System.getProperty(ConfigData.P_WEASIS_NAME)));
+              System.getProperty(ConfigData.P_WEASIS_TITLE)));
       mTracker =
           new ServiceTracker(
               mFelix.getBundleContext(), "org.apache.felix.service.command.CommandProcessor", null);

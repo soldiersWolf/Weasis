@@ -43,6 +43,8 @@ public class ConfigData {
   public static final String P_WEASIS_VERSION = "weasis.version";
   public static final String P_WEASIS_PROFILE = "weasis.profile";
   public static final String P_WEASIS_NAME = "weasis.name";
+  // Shown to the user only; the name keeps naming files, DICOM attributes and network agents
+  public static final String P_WEASIS_TITLE = "weasis.title";
   public static final String P_WEASIS_PATH = "weasis.path";
   public static final String P_WEASIS_RES_DATE = "weasis.resources.date";
   public static final String P_WEASIS_CODEBASE_LOCAL = "weasis.codebase.local";
@@ -212,6 +214,7 @@ public class ConfigData {
 
     String name = preferences.getValue(P_WEASIS_NAME, "Weasis"); // NON-NLS
     addProperty(P_WEASIS_NAME, name);
+    addProperty(P_WEASIS_TITLE, preferences.getValue(P_WEASIS_TITLE, name));
 
     String version = preferences.getValue(P_WEASIS_VERSION, "0.0.0");
     addProperty(P_WEASIS_VERSION, version);

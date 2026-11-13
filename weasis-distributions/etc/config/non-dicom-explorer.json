@@ -29,6 +29,10 @@
       "value": "Weasis Image Explorer"
     },
     {
+      "code": "weasis.title",
+      "value": "Weasis Image Explorer"
+    },
+    {
       "code": "weasis.profile",
       "value": "base-explorer"
     },
