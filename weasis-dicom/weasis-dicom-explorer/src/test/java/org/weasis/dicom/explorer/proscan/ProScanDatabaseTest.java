@@ -18,13 +18,17 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.LocalDate;
+import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.weasis.dicom.explorer.proscan.ProScanDatabase.Row;
 import org.weasis.dicom.explorer.proscan.ProScanDatabase.Visit;
 
 class ProScanDatabaseTest {
@@ -192,5 +196,74 @@ class ProScanDatabaseTest {
             IOException.class,
             () -> ProScanDatabase.parse(List.of(b64("E") + " " + b64("Файл зайнятий"))));
     assertEquals("Файл зайнятий", error.getMessage());
+  }
+  @Test
+  void findsTheSharedDatabaseFromTheWatchedFolders() throws IOException {
+    Path image = image();
+    Path shared = Files.createFile(root.resolve(ProScanDatabase.FILE_NAME));
+    Files.createFile(image.getParent().resolve(ProScanDatabase.FILE_NAME));
+
+    assertEquals(Optional.of(shared), ProScanDatabase.locate("", List.of(root)));
+    assertEquals(Optional.of(shared), ProScanDatabase.locate("", List.of(image.getParent())));
+    assertEquals(
+        Optional.of(Path.of("chosen.mdb")), ProScanDatabase.locate("chosen.mdb", List.of(root)));
+  }
+
+  @Test
+  void ignoresALoneArchiveCopy() throws IOException {
+    Path image = image();
+    Files.createFile(image.getParent().resolve(ProScanDatabase.FILE_NAME));
+
+    assertEquals(Optional.empty(), ProScanDatabase.locate("", List.of(image.getParent())));
+  }
+
+  @Test
+  void browsesTheImagesWithTheirPatientAndReport() throws IOException {
+    FakeRunner runner =
+        new FakeRunner(
+            List.of(
+                List.of(
+                    "B",
+                    "12",
+                    "2026-11-13 00:00:00",
+                    "1899-12-30 08:15:30",
+                    "Тестовий",
+                    "Тест",
+                    "Тестович",
+                    "1980-01-01 00:00:00",
+                    IMAGE,
+                    "Лікар Т.Т.",
+                    "Без патологічних змін.",
+                    " Легені без змін")));
+    LocalDate day = LocalDate.of(2026, 11, 13);
+
+    List<Row> rows = new ProScanDatabase(runner).browse(root.resolve("db.mdb"), day, day, " Тест ");
+
+    assertEquals(
+        List.of(
+            new Row(
+                12,
+                day,
+                LocalTime.of(8, 15, 30),
+                "Тестовий Тест Тестович",
+                LocalDate.of(1980, 1, 1),
+                IMAGE,
+                "Лікар Т.Т.",
+                "Без патологічних змін.",
+                "Легені без змін")),
+        rows);
+    Map<String, String> request = runner.requests.getFirst();
+    assertEquals("2026-11-14", request.get("PROSCAN_TO"));
+    assertEquals("Тест", request.get("PROSCAN_NAME"));
+  }
+
+  @Test
+  void findsTheImageInTheDailyFolderOfItsDate() throws IOException {
+    Path image = image();
+    Row row = new Row(1, LocalDate.of(2026, 11, 13), null, "", null, IMAGE, "", "", "");
+    Row elsewhere = new Row(1, LocalDate.of(2026, 1, 2), null, "", null, IMAGE, "", "", "");
+
+    assertEquals(Optional.of(image), ProScanDatabase.imageFile(root, row));
+    assertEquals(Optional.of(image), ProScanDatabase.imageFile(root, elsewhere));
   }
 }

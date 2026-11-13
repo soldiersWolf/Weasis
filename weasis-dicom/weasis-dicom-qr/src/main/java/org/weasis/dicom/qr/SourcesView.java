@@ -34,6 +34,7 @@ import org.weasis.core.api.gui.util.GuiExecutor;
 import org.weasis.dicom.explorer.FolderWatcher;
 import org.weasis.dicom.explorer.main.PatientListPanel;
 import org.weasis.dicom.explorer.pref.node.AbstractDicomNode;
+import org.weasis.dicom.explorer.proscan.ProScanSettingsPanel;
 
 /**
  * First page of the preferences, in plain words: how the patient list looks, the watched folders
@@ -59,6 +60,7 @@ public class SourcesView extends AbstractItemDialogPage {
 
     add(buildFoldersPanel(), "grow, wrap"); // NON-NLS
     add(buildArchivesPanel(), "grow, wrap"); // NON-NLS
+    add(new ProScanSettingsPanel(), "growx, wrap"); // NON-NLS
 
     FolderWatcher.addChangeListener(() -> GuiExecutor.execute(this::refreshFolders));
     ServerWatcher.getInstance().addChangeListener(() -> GuiExecutor.execute(this::refreshArchives));

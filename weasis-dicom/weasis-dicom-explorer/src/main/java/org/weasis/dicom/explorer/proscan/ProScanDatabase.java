@@ -13,14 +13,22 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Stream;
+import org.weasis.dicom.explorer.LocalPersistence;
 
 /**
  * Description of a ProScan fluorography image in the database of the fluorograph (patients2.mdb,
@@ -35,6 +43,12 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class ProScanDatabase {
 
   public static final String FILE_NAME = "patients2.mdb"; // NON-NLS
+
+  /** Preference key of the shared database chosen by the user, empty to find it by itself. */
+  public static final String P_DATABASE = "proscan.database"; // NON-NLS
+
+  private static final DateTimeFormatter JET_DATE_TIME =
+      DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"); // NON-NLS
 
   /** An item of a ProScan dictionary: a doctor or a diagnosis. */
   public record Entry(int id, String name) {
@@ -56,6 +70,18 @@ public final class ProScanDatabase {
       int doctorId,
       int diagnosisId,
       boolean archiveCopy) {}
+
+  /** A line of the database browser: an image with its patient and its report. */
+  public record Row(
+      int recordId,
+      LocalDate date,
+      LocalTime time,
+      String patient,
+      LocalDate birth,
+      String fileName,
+      String doctor,
+      String diagnosis,
+      String description) {}
 
   /** Runs one request against a database and returns the decoded fields of each output line. */
   interface Runner {
@@ -92,6 +118,119 @@ public final class ProScanDatabase {
       places.add(folder.resolve(FILE_NAME));
     }
     return places;
+  }
+
+  /** The shared database: the one chosen by the user, else the one found by the watched folders. */
+  public static Optional<Path> sharedDatabase(List<Path> watchedFolders) {
+    String chosen = LocalPersistence.getProperties().getProperty(P_DATABASE, "");
+    return locate(chosen, watchedFolders);
+  }
+
+  static Optional<Path> locate(String chosen, List<Path> watchedFolders) {
+    if (chosen != null && !chosen.isBlank()) {
+      return Optional.of(Path.of(chosen.strip()));
+    }
+    for (Path folder : watchedFolders) {
+      Path inside = folder.resolve(FILE_NAME);
+      // The database of a folder holding the daily folders, not the archive copy of a daily folder
+      if (Files.isRegularFile(inside) && hasSubfolder(folder)) {
+        return Optional.of(inside);
+      }
+      Path above = folder.toAbsolutePath().getParent();
+      if (above != null && Files.isRegularFile(above.resolve(FILE_NAME))) {
+        return Optional.of(above.resolve(FILE_NAME));
+      }
+    }
+    return Optional.empty();
+  }
+
+  private static boolean hasSubfolder(Path folder) {
+    try (Stream<Path> children = Files.list(folder)) {
+      return children.anyMatch(Files::isDirectory);
+    } catch (IOException e) {
+      return false;
+    }
+  }
+
+  /**
+   * The images taken between two days included, most recent first, optionally only the patients
+   * whose last name starts with the given text.
+   */
+  public List<Row> browse(Path db, LocalDate from, LocalDate to, String lastName)
+      throws IOException {
+    Map<String, String> args = args("browse", db, null); // NON-NLS
+    args.put("PROSCAN_FROM", from.toString()); // NON-NLS
+    args.put("PROSCAN_TO", to.plusDays(1).toString()); // NON-NLS
+    if (lastName != null && !lastName.isBlank()) {
+      args.put("PROSCAN_NAME", lastName.strip()); // NON-NLS
+    }
+    List<Row> rows = new ArrayList<>();
+    for (List<String> line : runner.run(args)) {
+      if (line.size() < 12 || !"B".equals(line.getFirst())) {
+        continue;
+      }
+      LocalDateTime date = toDateTime(line.get(2));
+      LocalDateTime time = toDateTime(line.get(3));
+      LocalDateTime birth = toDateTime(line.get(7));
+      rows.add(
+          new Row(
+              toInt(line.get(1)),
+              date == null ? null : date.toLocalDate(),
+              time == null ? null : time.toLocalTime(),
+              fullName(line.get(4), line.get(5), line.get(6)),
+              birth == null ? null : birth.toLocalDate(),
+              Objects.toString(line.get(8), ""),
+              clean(line.get(9)),
+              clean(line.get(10)),
+              toShown(line.get(11))));
+    }
+    return rows;
+  }
+
+  private static String fullName(String... parts) {
+    return String.join(
+        " ", Stream.of(parts).map(ProScanDatabase::clean).filter(p -> !p.isEmpty()).toList());
+  }
+
+  private static String clean(String value) {
+    return value == null ? "" : value.strip();
+  }
+
+  static LocalDateTime toDateTime(String value) {
+    if (value == null || value.isBlank()) {
+      return null;
+    }
+    try {
+      return LocalDateTime.parse(value.strip(), JET_DATE_TIME);
+    } catch (DateTimeParseException e) {
+      return null;
+    }
+  }
+
+  /**
+   * The image file of a record: in the daily folder named after its date, as ProScan names them
+   * (11-Nov-2026), else in any daily folder.
+   */
+  public static Optional<Path> imageFile(Path root, Row row) {
+    if (root == null || row.fileName().isBlank()) {
+      return Optional.empty();
+    }
+    if (row.date() != null) {
+      String day =
+          row.date().format(DateTimeFormatter.ofPattern("dd-MMM-yyyy", Locale.ENGLISH)); // NON-NLS
+      Path file = root.resolve(day).resolve(row.fileName());
+      if (Files.isRegularFile(file)) {
+        return Optional.of(file);
+      }
+    }
+    try (Stream<Path> days = Files.list(root)) {
+      return days.filter(Files::isDirectory)
+          .map(d -> d.resolve(row.fileName()))
+          .filter(Files::isRegularFile)
+          .findFirst();
+    } catch (IOException e) {
+      return Optional.empty();
+    }
   }
 
   /** Whether a database lies where ProScan keeps it for this image. */

@@ -59,9 +59,10 @@ import org.weasis.dicom.explorer.proscan.ProScanDatabase.Visit;
 public class ProScanReportPanel extends JPanel {
   private static final Logger LOGGER = LoggerFactory.getLogger(ProScanReportPanel.class);
 
-  private static final ExecutorService EXECUTOR =
+  // Shared with the database browser: one request at a time to the database
+  static final ExecutorService EXECUTOR =
       ThreadUtil.newSingleThreadDaemonExecutor("ProScan report"); // NON-NLS
-  private static final ProScanDatabase DATABASE = new ProScanDatabase();
+  static final ProScanDatabase DATABASE = new ProScanDatabase();
   private static final Entry NONE = new Entry(0, ProScanMessages.getString("none"));
 
   private final Runnable openNext;

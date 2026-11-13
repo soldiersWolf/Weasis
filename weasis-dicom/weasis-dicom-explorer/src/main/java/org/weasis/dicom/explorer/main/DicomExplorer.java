@@ -68,6 +68,7 @@ import org.weasis.dicom.explorer.exp.ExplorerTask;
 import org.weasis.dicom.explorer.exp.ExportToolBar;
 import org.weasis.dicom.explorer.imp.ImportToolBar;
 import org.weasis.dicom.explorer.pref.download.DicomExplorerPrefView;
+import org.weasis.dicom.explorer.proscan.ProScanBackup;
 
 public class DicomExplorer extends PluginTool
     implements DataExplorerView, SeriesViewerListener, PropertyChangeListener {
@@ -190,6 +191,7 @@ public class DicomExplorer extends PluginTool
     setupThumbnailView();
     this.model.addPropertyChangeListener(this);
     FolderWatcher.start(this.model);
+    ProScanBackup.start();
   }
 
   @Override

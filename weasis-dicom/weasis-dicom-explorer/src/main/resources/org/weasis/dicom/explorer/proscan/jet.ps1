@@ -17,6 +17,10 @@ function Get-Arg([string]$name) {
 function Write-Line([object[]]$fields) {
   $encoded = foreach ($f in $fields) {
     if ($null -eq $f -or $f -is [DBNull]) { '-' }
+    elseif ($f -is [DateTime]) {
+      $text = $f.ToString('yyyy-MM-dd HH:mm:ss', [Globalization.CultureInfo]::InvariantCulture)
+      [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($text))
+    }
     else { [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([string]$f)) }
   }
   [Console]::Out.WriteLine(($encoded -join ' '))
@@ -62,6 +66,31 @@ try {
       'catalog' {
         Write-Rows $connection 'D' 'SELECT ID, FIO FROM DoctorsSPR ORDER BY FIO'
         Write-Rows $connection 'G' 'SELECT ID, DiagnosName FROM DiagnosesSPR ORDER BY DiagnosName'
+      }
+      'browse' {
+        # Jet needs the parentheses around each join
+        $sql = 'SELECT TOP 3000 f.ID, f.[Date], f.[Time], p.LastName, p.FirstName, ' +
+          'p.MidleName, p.DOB, f.FileName, d.FIO, g.DiagnosName, f.Description ' +
+          'FROM ((FluorTab AS f LEFT JOIN Patients AS p ON f.PatientID = p.ID) ' +
+          'LEFT JOIN DoctorsSPR AS d ON f.DoctorID = d.ID) ' +
+          'LEFT JOIN DiagnosesSPR AS g ON f.DiagnID = g.ID ' +
+          'WHERE f.[Date] >= ? AND f.[Date] < ?'
+        $name = Get-Arg 'PROSCAN_NAME'
+        if ($name) { $sql += ' AND p.LastName LIKE ?' }
+        $command = $connection.CreateCommand()
+        $command.CommandText = $sql + ' ORDER BY f.[Date] DESC, f.[Time] DESC'
+        $culture = [Globalization.CultureInfo]::InvariantCulture
+        Add-Param $command Date ([datetime]::ParseExact((Get-Arg 'PROSCAN_FROM'), 'yyyy-MM-dd', $culture))
+        Add-Param $command Date ([datetime]::ParseExact((Get-Arg 'PROSCAN_TO'), 'yyyy-MM-dd', $culture))
+        if ($name) { Add-Param $command VarWChar ($name + '%') }
+        $reader = $command.ExecuteReader()
+        try {
+          while ($reader.Read()) {
+            $row = @('B')
+            for ($i = 0; $i -lt $reader.FieldCount; $i++) { $row += , $reader.GetValue($i) }
+            Write-Line $row
+          }
+        } finally { $reader.Close() }
       }
       'write' {
         $command = $connection.CreateCommand()

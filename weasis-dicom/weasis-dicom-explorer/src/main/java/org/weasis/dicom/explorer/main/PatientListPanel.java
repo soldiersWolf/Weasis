@@ -19,6 +19,9 @@ import java.awt.event.ActionEvent;
 import java.awt.event.KeyEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.io.File;
+import java.net.URI;
+import java.nio.file.Path;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
@@ -64,14 +67,21 @@ import org.dcm4che3.data.Tag;
 import org.weasis.core.api.explorer.ObservableEvent;
 import org.weasis.core.api.gui.util.GuiExecutor;
 import org.weasis.core.api.gui.util.GuiUtils;
+import org.weasis.core.api.media.data.MediaSeries.MEDIA_POSITION;
 import org.weasis.core.api.media.data.MediaSeriesGroup;
 import org.weasis.core.ui.editor.image.ViewerPlugin;
+import org.weasis.dicom.codec.DicomImageElement;
 import org.weasis.dicom.codec.DicomSeries;
 import org.weasis.dicom.codec.TagD;
 import org.weasis.dicom.explorer.DicomModel;
 import org.weasis.dicom.explorer.DicomSorter;
+import org.weasis.dicom.explorer.FolderWatcher;
+import org.weasis.dicom.explorer.HangingProtocols.OpeningViewer;
+import org.weasis.dicom.explorer.LoadLocalDicom;
 import org.weasis.dicom.explorer.LocalPersistence;
 import org.weasis.dicom.explorer.StudySources;
+import org.weasis.dicom.explorer.proscan.ProScanBrowser;
+import org.weasis.dicom.explorer.proscan.ProScanDatabase;
 import org.weasis.dicom.explorer.proscan.ProScanReportPanel;
 
 /**
@@ -133,6 +143,7 @@ public class PatientListPanel extends JPanel
   private boolean showRemote;
   private int remoteVisits;
   private final JButton viewButton = new JButton(PatientListMessages.getString("view"));
+  private final JButton proScanButton = new JButton(PatientListMessages.getString("proscan"));
   private Density density = loadDensity();
   private boolean manySources;
   private final Timer refreshLater = new Timer(400, _ -> refresh());
@@ -194,9 +205,16 @@ public class PatientListPanel extends JPanel
 
     JScrollPane scroll = new JScrollPane(list);
     scroll.setBorder(BorderFactory.createLineBorder(UIManager.getColor("Component.borderColor")));
-    JPanel searchBar = new JPanel(new MigLayout("ins 0, fillx", "[grow,fill]2[]")); // NON-NLS
+    JPanel searchBar = new JPanel(new MigLayout("ins 0, fillx", "[grow,fill]2[]2[]")); // NON-NLS
     searchBar.add(search, "growx"); // NON-NLS
     searchBar.add(viewButton);
+    proScanButton.setToolTipText(PatientListMessages.getString("proscan.tip"));
+    proScanButton.addActionListener(_ -> ProScanBrowser.open(this));
+    proScanButton.setVisible(false);
+    searchBar.add(proScanButton, "hidemode 3"); // NON-NLS
+    ProScanBrowser.setImageOpener(this::showImage);
+    FolderWatcher.addChangeListener(this::updateProScanButton);
+    updateProScanButton();
     ButtonGroup tabs = new ButtonGroup();
     for (JToggleButton tab : List.of(localTab, remoteTab)) {
       tab.putClientProperty(
@@ -335,6 +353,99 @@ public class PatientListPanel extends JPanel
           }
           ThumbnailMouseAndKeyAdapter.openSeriesInDefaultPlugin(series, model);
         });
+  }
+
+  /** Shows the database browser button when a shared ProScan database is found. */
+  private void updateProScanButton() {
+    if (!ProScanDatabase.isSupported()) {
+      return;
+    }
+    // Looking at a network share can be slow
+    Thread.ofVirtual()
+        .start(
+            () -> {
+              boolean found =
+                  ProScanDatabase.sharedDatabase(FolderWatcher.getWatchedFolders()).isPresent();
+              GuiExecutor.execute(() -> proScanButton.setVisible(found));
+            });
+  }
+
+  /** Selects the visit of an image file, loading the file first when it is not in the list. */
+  private void showImage(Path file) {
+    if (selectImage(file)) {
+      return;
+    }
+    String label =
+        FolderWatcher.getWatchedFolders().stream()
+            .filter(file::startsWith)
+            .findFirst()
+            .map(FolderWatcher::labelOf)
+            .orElse(FolderWatcher.labelOf(file.getParent()));
+    DicomModel.LOADING_EXECUTOR.execute(
+        new LoadLocalDicom(
+                new File[] {file.toFile()},
+                false,
+                explorer.getDataExplorerModel(),
+                OpeningViewer.NONE)
+            .withSourceLabel(label));
+    int[] attempts = {0};
+    Timer wait = new Timer(500, null);
+    wait.addActionListener(
+        _ -> {
+          if (selectImage(file) || ++attempts[0] > 40) {
+            wait.stop();
+          }
+        });
+    wait.start();
+  }
+
+  private boolean selectImage(Path file) {
+    DicomModel model = explorer.getDataExplorerModel();
+    for (int i = 0; i < source.getSize(); i++) {
+      if (!(source.getElementAt(i) instanceof MediaSeriesGroup patient)) {
+        continue;
+      }
+      for (MediaSeriesGroup study : model.getChildren(patient)) {
+        if (isImageOf(model, study, file)) {
+          return selectStudy(study);
+        }
+      }
+    }
+    return false;
+  }
+
+  /** Shows the study whatever the search, tab and closed days, and selects it. */
+  private boolean selectStudy(MediaSeriesGroup study) {
+    search.setText("");
+    showRemote = false;
+    if (sourceFilter.getItemCount() > 0) {
+      sourceFilter.setSelectedIndex(0);
+    }
+    toggledDays.put(TagD.getTagValue(study, Tag.StudyDate, LocalDate.class), true);
+    refresh();
+    int index = indexOfStudy(study);
+    if (index < 0) {
+      return false;
+    }
+    list.setSelectedIndex(index);
+    list.ensureIndexIsVisible(index);
+    return true;
+  }
+
+  private static boolean isImageOf(DicomModel model, MediaSeriesGroup study, Path file) {
+    for (MediaSeriesGroup s : model.getChildren(study)) {
+      if (s instanceof DicomSeries series) {
+        DicomImageElement image = series.getMedia(MEDIA_POSITION.FIRST, null, null);
+        URI uri = image == null ? null : image.getMediaURI();
+        // Windows paths ignore case
+        if (uri != null
+            && "file".equalsIgnoreCase(uri.getScheme()) // NON-NLS
+            && Path.of(uri).toString().equalsIgnoreCase(file.toString())) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   /** Selects, and so opens, the visit after the selected one. */
