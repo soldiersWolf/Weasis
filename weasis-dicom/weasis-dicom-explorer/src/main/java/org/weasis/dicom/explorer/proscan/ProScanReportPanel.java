@@ -216,8 +216,9 @@ public class ProScanReportPanel extends JPanel {
             if (current == generation) {
               visit = found.get();
               fill(found.get(), catalog);
-              setEditable(true);
-              setStatus(ProScanMessages.getString("status.loaded"), false);
+              boolean copy = found.get().archiveCopy();
+              setEditable(!copy);
+              setStatus(ProScanMessages.getString(copy ? "status.archive" : "status.loaded"), copy);
             }
           });
     } catch (Exception e) {

@@ -76,9 +76,38 @@ class ProScanDatabaseTest {
 
     Visit visit = new ProScanDatabase(runner).read(image).orElseThrow();
 
-    assertEquals(new Visit(db, 104044, IMAGE, "Легені без змін\nСерце в нормі", 4, 5), visit);
+    assertEquals(
+        new Visit(db, 104044, IMAGE, "Легені без змін\nСерце в нормі", 4, 5, false), visit);
     assertEquals("read", runner.requests.getFirst().get("PROSCAN_MODE"));
     assertEquals(IMAGE, runner.requests.getFirst().get("PROSCAN_FILE"));
+  }
+
+  @Test
+  void neverFallsBackOnTheArchiveCopyOfTheDailyFolder() throws IOException {
+    Path image = image();
+    Path shared = Files.createFile(root.resolve(ProScanDatabase.FILE_NAME));
+    Files.createFile(image.getParent().resolve(ProScanDatabase.FILE_NAME));
+    FakeRunner runner = new FakeRunner(List.of());
+
+    assertTrue(new ProScanDatabase(runner).read(image).isEmpty());
+    assertEquals(
+        List.of(shared.toString()),
+        runner.requests.stream().map(r -> r.get("PROSCAN_DB")).toList());
+  }
+
+  @Test
+  void readsTheArchiveCopyAloneButNeverWritesIt() throws IOException {
+    Path image = image();
+    Path copy = Files.createFile(image.getParent().resolve(ProScanDatabase.FILE_NAME));
+    FakeRunner runner = new FakeRunner(List.of(List.of("R", "9", " Норма", "4", "5")));
+    ProScanDatabase database = new ProScanDatabase(runner);
+
+    Visit visit = database.read(image).orElseThrow();
+
+    assertEquals(copy, visit.database());
+    assertTrue(visit.archiveCopy());
+    assertThrows(IOException.class, () -> database.write(visit, "x", 4, 5));
+    assertEquals(1, runner.requests.size());
   }
 
   @Test
@@ -103,7 +132,7 @@ class ProScanDatabaseTest {
   @Test
   void writesTheChosenDoctorAndDiagnosis() throws IOException {
     FakeRunner runner = new FakeRunner(List.of(List.of("N", "1")));
-    Visit visit = new Visit(root.resolve("patients2.mdb"), 7, IMAGE, "", 4, 5);
+    Visit visit = new Visit(root.resolve("patients2.mdb"), 7, IMAGE, "", 4, 5, false);
 
     new ProScanDatabase(runner).write(visit, "Норма", 3, 254);
 
@@ -118,7 +147,7 @@ class ProScanDatabaseTest {
   @Test
   void failsWhenNoRecordWasUpdated() {
     FakeRunner runner = new FakeRunner(List.of(List.of("N", "0")));
-    Visit visit = new Visit(root.resolve("patients2.mdb"), 7, IMAGE, "", 4, 5);
+    Visit visit = new Visit(root.resolve("patients2.mdb"), 7, IMAGE, "", 4, 5, false);
 
     assertThrows(IOException.class, () -> new ProScanDatabase(runner).write(visit, "x", 0, 0));
   }

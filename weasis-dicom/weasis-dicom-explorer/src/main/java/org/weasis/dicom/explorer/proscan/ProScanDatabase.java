@@ -24,8 +24,13 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Description of a ProScan fluorography image in the database of the fluorograph (patients2.mdb,
- * table FluorTab), found next to the daily image folders. A record is matched by the name of the
- * image file, which ProScan stores with the record.
+ * table FluorTab). A record is matched by the name of the image file, which ProScan stores with the
+ * record.
+ *
+ * <p>The database ProScan works with lies in the folder holding the daily image folders. The
+ * database inside a daily folder is the copy that the archiving of ProScan writes after each image
+ * and replaces at the next one: it is read only when there is no shared database, and never
+ * written, since a change there would be lost.
  */
 public final class ProScanDatabase {
 
@@ -42,9 +47,15 @@ public final class ProScanDatabase {
   /** The doctors and diagnoses that a description refers to. */
   public record Catalog(List<Entry> doctors, List<Entry> diagnoses) {}
 
-  /** The record of an image, as read from the database. */
+  /** The record of an image, as read from the database or from an archive copy of it. */
   public record Visit(
-      Path database, int recordId, String fileName, String text, int doctorId, int diagnosisId) {}
+      Path database,
+      int recordId,
+      String fileName,
+      String text,
+      int doctorId,
+      int diagnosisId,
+      boolean archiveCopy) {}
 
   /** Runs one request against a database and returns the decoded fields of each output line. */
   interface Runner {
@@ -88,24 +99,33 @@ public final class ProScanDatabase {
     return candidates(image).stream().anyMatch(Files::isRegularFile);
   }
 
-  /** The record of the image, from the first database holding it. */
+  /** The record of the image, from the shared database or else from the archive copy. */
   public Optional<Visit> read(Path image) throws IOException {
     String fileName = image.getFileName().toString();
-    for (Path db : candidates(image)) {
-      if (!Files.isRegularFile(db)) {
-        continue;
+    List<Path> places = candidates(image);
+    for (Path db : places) {
+      if (Files.isRegularFile(db)) {
+        // Never fall back on the copy when the shared database lacks the image: it would be saved
+        // where the next archiving erases it
+        return readRecord(db, fileName, places.size() > 1 && db.equals(places.getLast()));
       }
-      for (List<String> line : runner.run(args("read", db, fileName))) { // NON-NLS
-        if (line.size() >= 5 && "R".equals(line.getFirst())) {
-          return Optional.of(
-              new Visit(
-                  db,
-                  toInt(line.get(1)),
-                  fileName,
-                  toShown(line.get(2)),
-                  toInt(line.get(3)),
-                  toInt(line.get(4))));
-        }
+    }
+    return Optional.empty();
+  }
+
+  private Optional<Visit> readRecord(Path db, String fileName, boolean archiveCopy)
+      throws IOException {
+    for (List<String> line : runner.run(args("read", db, fileName))) { // NON-NLS
+      if (line.size() >= 5 && "R".equals(line.getFirst())) {
+        return Optional.of(
+            new Visit(
+                db,
+                toInt(line.get(1)),
+                fileName,
+                toShown(line.get(2)),
+                toInt(line.get(3)),
+                toInt(line.get(4)),
+                archiveCopy));
       }
     }
     return Optional.empty();
@@ -142,6 +162,9 @@ public final class ProScanDatabase {
 
   /** Saves the description, the doctor and the diagnosis of the record. */
   public void write(Visit visit, String text, int doctorId, int diagnosisId) throws IOException {
+    if (visit.archiveCopy()) {
+      throw new IOException(ProScanMessages.getString("status.archive"));
+    }
     Map<String, String> args = args("write", visit.database(), visit.fileName()); // NON-NLS
     args.put("PROSCAN_ID", String.valueOf(visit.recordId())); // NON-NLS
     args.put("PROSCAN_TEXT", toStored(text)); // NON-NLS
