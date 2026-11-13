@@ -49,6 +49,7 @@ import javax.swing.JRadioButtonMenuItem;
 import javax.swing.JScrollPane;
 import javax.swing.JSplitPane;
 import javax.swing.JTable;
+import javax.swing.JTextArea;
 import javax.swing.JTextField;
 import javax.swing.JToggleButton;
 import javax.swing.ListSelectionModel;
@@ -494,16 +495,24 @@ public class ServerDownloadView extends AbstractItemDialogPage
     download.setEnabled(false);
     download.putClientProperty(FlatClientProperties.STYLE, "font: +1 bold"); // NON-NLS
     download.addActionListener(_ -> downloadSelection());
-    JLabel storage = new JLabel(DownloadMessages.getString("storage"));
+    // The note wraps to the width of the dialog instead of widening it
+    JTextArea storage = new JTextArea(DownloadMessages.getString("storage"));
+    storage.setEditable(false);
+    storage.setFocusable(false);
+    storage.setOpaque(false);
+    storage.setLineWrap(true);
+    storage.setWrapStyleWord(true);
+    storage.setBorder(BorderFactory.createEmptyBorder());
     storage.setToolTipText(DownloadMessages.getString("storage.tip"));
     storage.setForeground(UIManager.getColor("Label.disabledForeground"));
-    storage.putClientProperty(FlatClientProperties.STYLE_CLASS, "small"); // NON-NLS
-    JPanel bar =
-        new JPanel(new MigLayout("ins 0, fillx, wrap 3", "[grow,fill][]8[]")); // NON-NLS
-    bar.add(status, "growx"); // NON-NLS
-    bar.add(progress, "width 80lp!, hidemode 3"); // NON-NLS
-    bar.add(download);
-    bar.add(storage, "span 3"); // NON-NLS
+    storage.setFont(UIManager.getFont("small.font"));
+    // A long status is cut, and shown whole in its tooltip
+    status.addPropertyChangeListener("text", _ -> status.setToolTipText(status.getText()));
+    JPanel bar = new JPanel(new MigLayout("ins 0, fillx", "[grow,fill][]8[]")); // NON-NLS
+    bar.add(status, "growx, wmin 0"); // NON-NLS
+    bar.add(progress, "width 80lp!, hidemode 2"); // NON-NLS
+    bar.add(download, "wrap"); // NON-NLS
+    bar.add(storage, "span 3, growx, wmin 0"); // NON-NLS
     return bar;
   }
 
