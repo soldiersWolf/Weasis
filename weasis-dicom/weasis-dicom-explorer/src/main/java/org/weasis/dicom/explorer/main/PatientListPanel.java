@@ -72,6 +72,7 @@ import org.weasis.dicom.explorer.DicomModel;
 import org.weasis.dicom.explorer.DicomSorter;
 import org.weasis.dicom.explorer.LocalPersistence;
 import org.weasis.dicom.explorer.StudySources;
+import org.weasis.dicom.explorer.proscan.ProScanReportPanel;
 
 /**
  * Always-visible list of every loaded visit, grouped by day with the most recent day first and a
@@ -137,6 +138,7 @@ public class PatientListPanel extends JPanel
   private final Timer refreshLater = new Timer(400, _ -> refresh());
   // Days the user opened or closed; the other days follow the default (only the latest is open)
   private final Map<LocalDate, Boolean> toggledDays = new HashMap<>();
+  private final ProScanReportPanel report = new ProScanReportPanel(this::openNextVisit);
   private boolean adjusting;
 
   public PatientListPanel(DicomExplorer explorer, ListModel<Object> patients) {
@@ -214,6 +216,7 @@ public class PatientListPanel extends JPanel
     add(sourceFilter, "newline, growx, hidemode 3"); // NON-NLS
     add(count, "newline, growx"); // NON-NLS
     add(scroll, "newline, grow, push, height 80lp:360lp:"); // NON-NLS
+    add(report, "newline, growx, hidemode 3"); // NON-NLS
 
     refreshLater.setRepeats(false);
     source.addListDataListener(new RefreshOnChange());
@@ -321,17 +324,28 @@ public class PatientListPanel extends JPanel
   private void open(VisitRow visit) {
     explorer.selectPatient(visit.patient());
     DicomModel model = explorer.getDataExplorerModel();
-    firstSeries(model, visit.study())
-        .ifPresent(
-            series -> {
-              // One viewer at a time: the picked visit replaces the previous one
-              List<ViewerPlugin<?>> open =
-                  new ArrayList<>(GuiUtils.getUICore().getViewerPlugins());
-              if (!open.isEmpty()) {
-                GuiUtils.getUICore().closeSeriesViewer(open);
-              }
-              ThumbnailMouseAndKeyAdapter.openSeriesInDefaultPlugin(series, model);
-            });
+    Optional<DicomSeries> first = firstSeries(model, visit.study());
+    report.setVisit(first.orElse(null), visit.patient().toString());
+    first.ifPresent(
+        series -> {
+          // One viewer at a time: the picked visit replaces the previous one
+          List<ViewerPlugin<?>> open = new ArrayList<>(GuiUtils.getUICore().getViewerPlugins());
+          if (!open.isEmpty()) {
+            GuiUtils.getUICore().closeSeriesViewer(open);
+          }
+          ThumbnailMouseAndKeyAdapter.openSeriesInDefaultPlugin(series, model);
+        });
+  }
+
+  /** Selects, and so opens, the visit after the selected one. */
+  private void openNextVisit() {
+    for (int i = list.getSelectedIndex() + 1; i < shown.size(); i++) {
+      if (shown.get(i) instanceof VisitRow) {
+        list.setSelectedIndex(i);
+        list.ensureIndexIsVisible(i);
+        return;
+      }
+    }
   }
 
   /** First displayable series of the study, in the explorer's series order. */

@@ -1,0 +1,167 @@
+/*
+ * Copyright (c) 2026 Weasis Team and other contributors.
+ *
+ * This program and the accompanying materials are made available under the terms of the Eclipse
+ * Public License 2.0 which is available at https://www.eclipse.org/legal/epl-2.0, or the Apache
+ * License, Version 2.0 which is available at https://www.apache.org/licenses/LICENSE-2.0.
+ *
+ * SPDX-License-Identifier: EPL-2.0 OR Apache-2.0
+ */
+package org.weasis.dicom.explorer.proscan;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Base64;
+import java.util.List;
+import java.util.Map;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+import org.weasis.dicom.explorer.proscan.ProScanDatabase.Visit;
+
+class ProScanDatabaseTest {
+
+  private static final String IMAGE = "TestovyiTT1311080000.dcm"; // NON-NLS
+
+  @TempDir Path root;
+
+  /** Answers each request with the given lines and records the requests. */
+  private static final class FakeRunner implements ProScanDatabase.Runner {
+    final List<Map<String, String>> requests = new ArrayList<>();
+    final List<List<String>> answer;
+
+    FakeRunner(List<List<String>> answer) {
+      this.answer = answer;
+    }
+
+    @Override
+    public List<List<String>> run(Map<String, String> args) {
+      requests.add(Map.copyOf(args));
+      return answer;
+    }
+  }
+
+  private Path image() throws IOException {
+    Path day = Files.createDirectories(root.resolve("13-Nov-2026")); // NON-NLS
+    return Files.createFile(day.resolve(IMAGE));
+  }
+
+  private static String b64(String value) {
+    return Base64.getEncoder().encodeToString(value.getBytes(StandardCharsets.UTF_8));
+  }
+
+  @Test
+  void looksForTheSharedDatabaseAboveTheDailyFolderFirst() throws IOException {
+    Path image = image();
+    assertEquals(
+        List.of(root.resolve("patients2.mdb"), image.getParent().resolve("patients2.mdb")),
+        ProScanDatabase.candidates(image));
+  }
+
+  @Test
+  void readsTheRecordOfTheImageFromTheSharedDatabase() throws IOException {
+    Path image = image();
+    Path db = Files.createFile(root.resolve(ProScanDatabase.FILE_NAME));
+    FakeRunner runner =
+        new FakeRunner(
+            List.of(List.of("R", "104044", " Легені без змін\r\nСерце в нормі", "4", "5")));
+
+    Visit visit = new ProScanDatabase(runner).read(image).orElseThrow();
+
+    assertEquals(new Visit(db, 104044, IMAGE, "Легені без змін\nСерце в нормі", 4, 5), visit);
+    assertEquals("read", runner.requests.getFirst().get("PROSCAN_MODE"));
+    assertEquals(IMAGE, runner.requests.getFirst().get("PROSCAN_FILE"));
+  }
+
+  @Test
+  void findsNothingWithoutADatabase() throws IOException {
+    Path image = image();
+    FakeRunner runner = new FakeRunner(List.of());
+
+    assertTrue(new ProScanDatabase(runner).read(image).isEmpty());
+    assertTrue(runner.requests.isEmpty());
+    assertFalse(ProScanDatabase.hasDatabase(image));
+  }
+
+  @Test
+  void storesTheTextTheWayProScanDoes() {
+    assertEquals(" ", ProScanDatabase.toStored("  "));
+    assertEquals(
+        " Сколіоз.\r\nЛегені без змін", ProScanDatabase.toStored("Сколіоз.\nЛегені без змін\n"));
+    assertEquals("", ProScanDatabase.toShown(" "));
+    assertEquals("", ProScanDatabase.toShown(null));
+  }
+
+  @Test
+  void writesTheChosenDoctorAndDiagnosis() throws IOException {
+    FakeRunner runner = new FakeRunner(List.of(List.of("N", "1")));
+    Visit visit = new Visit(root.resolve("patients2.mdb"), 7, IMAGE, "", 4, 5);
+
+    new ProScanDatabase(runner).write(visit, "Норма", 3, 254);
+
+    Map<String, String> request = runner.requests.getFirst();
+    assertEquals("write", request.get("PROSCAN_MODE"));
+    assertEquals("7", request.get("PROSCAN_ID"));
+    assertEquals(" Норма", request.get("PROSCAN_TEXT"));
+    assertEquals("3", request.get("PROSCAN_DOCTOR"));
+    assertEquals("254", request.get("PROSCAN_DIAGNOSIS"));
+  }
+
+  @Test
+  void failsWhenNoRecordWasUpdated() {
+    FakeRunner runner = new FakeRunner(List.of(List.of("N", "0")));
+    Visit visit = new Visit(root.resolve("patients2.mdb"), 7, IMAGE, "", 4, 5);
+
+    assertThrows(IOException.class, () -> new ProScanDatabase(runner).write(visit, "x", 0, 0));
+  }
+
+  @Test
+  void readsTheDictionariesOncePerDatabase() throws IOException {
+    FakeRunner runner =
+        new FakeRunner(
+            List.of(
+                List.of("D", "4", "Лікар Тестовий"),
+                List.of("G", "5", "Без патологічних змін."),
+                List.of("G", "60", "   ")));
+    ProScanDatabase database = new ProScanDatabase(runner);
+    Path db = root.resolve("patients2.mdb");
+
+    ProScanDatabase.Catalog catalog = database.catalog(db);
+    database.catalog(db);
+
+    assertEquals(List.of(new ProScanDatabase.Entry(4, "Лікар Тестовий")), catalog.doctors());
+    assertEquals(
+        List.of(new ProScanDatabase.Entry(5, "Без патологічних змін.")), catalog.diagnoses());
+    assertEquals(1, runner.requests.size());
+  }
+
+  @Test
+  void decodesTheScriptOutputAndSkipsOtherLines() throws IOException {
+    List<List<String>> rows =
+        ProScanDatabase.parse(
+            List.of(
+                "WARNING: something from PowerShell",
+                "",
+                b64("R") + " " + b64("12") + " - " + b64("4") + " " + b64("5")));
+
+    assertEquals(1, rows.size());
+    assertEquals(Arrays.asList("R", "12", null, "4", "5"), rows.getFirst());
+  }
+
+  @Test
+  void reportsTheErrorOfTheScript() {
+    IOException error =
+        assertThrows(
+            IOException.class,
+            () -> ProScanDatabase.parse(List.of(b64("E") + " " + b64("Файл зайнятий"))));
+    assertEquals("Файл зайнятий", error.getMessage());
+  }
+}
