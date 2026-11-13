@@ -343,7 +343,13 @@ public class PatientListPanel extends JPanel
     explorer.selectPatient(visit.patient());
     DicomModel model = explorer.getDataExplorerModel();
     Optional<DicomSeries> first = firstSeries(model, visit.study());
-    report.setVisit(first.orElse(null), visit.patient().toString());
+    report.setVisit(
+        first.orElse(null),
+        new ProScanReportPanel.Patient(
+            visit.patient().toString(),
+            TagD.getTagValue(visit.patient(), Tag.PatientBirthDate, LocalDate.class),
+            visit.date(),
+            visit.time()));
     first.ifPresent(
         series -> {
           // One viewer at a time: the picked visit replaces the previous one

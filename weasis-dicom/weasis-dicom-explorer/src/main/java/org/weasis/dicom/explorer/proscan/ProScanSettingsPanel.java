@@ -9,14 +9,20 @@
  */
 package org.weasis.dicom.explorer.proscan;
 
+import java.io.IOException;
 import java.nio.file.Path;
 import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
 import javax.swing.JFileChooser;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
+import javax.swing.JTextField;
+import javax.swing.event.DocumentEvent;
+import javax.swing.event.DocumentListener;
 import javax.swing.filechooser.FileNameExtensionFilter;
 import net.miginfocom.swing.MigLayout;
 import org.weasis.core.api.gui.util.GuiExecutor;
@@ -24,15 +30,17 @@ import org.weasis.dicom.explorer.FolderWatcher;
 import org.weasis.dicom.explorer.LocalPersistence;
 
 /**
- * Preferences of the ProScan database: where it is, and the buttons to browse it and to save a
- * copy of a period. Every change is saved at once.
+ * Preferences of the ProScan database: where it is, the buttons to browse it, to save a copy of
+ * a period and to build the report forms, and the facility printed on the results. Every change is
+ * saved at once.
  */
 public class ProScanSettingsPanel extends JPanel {
 
   private final JLabel databaseLabel = new JLabel();
 
   public ProScanSettingsPanel() {
-    setLayout(new MigLayout("fillx, ins 6, gap 6 6", "[][grow,fill][][]", "")); // NON-NLS
+    // Each row is short, so that the page fits a narrow preferences window
+    setLayout(new MigLayout("fillx, ins 6, gap 6 6, wrap 2", "[][grow,fill]", "")); // NON-NLS
     setBorder(BorderFactory.createTitledBorder(ProScanMessages.getString("settings.title")));
 
     JButton chooseDb = new JButton(ProScanMessages.getString("settings.choose"));
@@ -46,19 +54,73 @@ public class ProScanSettingsPanel extends JPanel {
         });
     add(new JLabel(ProScanMessages.getString("settings.database")));
     add(databaseLabel, "wmin 0"); // NON-NLS
-    add(chooseDb);
-    add(autoDb, "wrap"); // NON-NLS
+    add(chooseDb, "skip, split 2"); // NON-NLS
+    add(autoDb);
 
     JButton browse = new JButton(ProScanMessages.getString("settings.browse"));
     browse.addActionListener(_ -> ProScanBrowser.open(this));
     JButton export = new JButton(ProScanMessages.getString("export.open"));
     export.addActionListener(
         _ -> ProScanExportDialog.open(this, LocalDate.now().minusDays(6), LocalDate.now()));
-    add(browse, "skip, span, split 2"); // NON-NLS
-    add(export, "wrap"); // NON-NLS
+    JButton forms = new JButton(ProScanMessages.getString("forms.edit"));
+    forms.addActionListener(_ -> openForms());
+    add(browse, "skip, wmin 0"); // NON-NLS
+    add(export, "skip, wmin 0"); // NON-NLS
+    add(forms, "skip, wmin 0"); // NON-NLS
+
+    JTextField facility =
+        new JTextField(LocalPersistence.getProperties().getProperty(ProScanPrint.P_FACILITY, ""));
+    facility
+        .getDocument()
+        .addDocumentListener(
+            new DocumentListener() {
+              private void save() {
+                LocalPersistence.getProperties()
+                    .setProperty(ProScanPrint.P_FACILITY, facility.getText().strip());
+              }
+
+              @Override
+              public void insertUpdate(DocumentEvent e) {
+                save();
+              }
+
+              @Override
+              public void removeUpdate(DocumentEvent e) {
+                save();
+              }
+
+              @Override
+              public void changedUpdate(DocumentEvent e) {
+                save();
+              }
+            });
+    add(new JLabel(ProScanMessages.getString("print.facility")), "gaptop 6"); // NON-NLS
+    add(facility, "wmin 0, gaptop 6"); // NON-NLS
 
     FolderWatcher.addChangeListener(() -> GuiExecutor.execute(this::refreshDatabase));
     refreshDatabase();
+  }
+
+  /** Opens the form constructor with the conclusions of ProScan, read in the background. */
+  private void openForms() {
+    ProScanReportPanel.EXECUTOR.execute(
+        () -> {
+          List<String> conclusions = new ArrayList<>();
+          if (ProScanDatabase.isSupported()) {
+            try {
+              Optional<Path> db = ProScanDatabase.sharedDatabase(FolderWatcher.getWatchedFolders());
+              if (db.isPresent()) {
+                ProScanReportPanel.DATABASE.catalog(db.get()).diagnoses().stream()
+                    .map(ProScanDatabase.Entry::name)
+                    .distinct()
+                    .forEach(conclusions::add);
+              }
+            } catch (IOException e) {
+              // The forms can still be made, with conclusions typed by hand
+            }
+          }
+          GuiExecutor.execute(() -> ProScanFormEditor.open(this, conclusions));
+        });
   }
 
   private void chooseDatabase() {

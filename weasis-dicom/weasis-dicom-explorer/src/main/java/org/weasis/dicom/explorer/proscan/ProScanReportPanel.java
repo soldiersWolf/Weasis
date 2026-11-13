@@ -17,8 +17,10 @@ import java.awt.event.InputEvent;
 import java.awt.event.KeyEvent;
 import java.net.URI;
 import java.nio.file.Path;
+import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.ExecutorService;
@@ -29,8 +31,10 @@ import javax.swing.JButton;
 import javax.swing.JComboBox;
 import javax.swing.JComponent;
 import javax.swing.JLabel;
+import javax.swing.JMenuItem;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
+import javax.swing.JPopupMenu;
 import javax.swing.JScrollPane;
 import javax.swing.JTextArea;
 import javax.swing.KeyStroke;
@@ -50,6 +54,7 @@ import org.weasis.dicom.codec.TagD;
 import org.weasis.dicom.explorer.proscan.ProScanDatabase.Catalog;
 import org.weasis.dicom.explorer.proscan.ProScanDatabase.Entry;
 import org.weasis.dicom.explorer.proscan.ProScanDatabase.Visit;
+import org.weasis.dicom.explorer.proscan.ProScanForms.Form;
 
 /**
  * Report of the ProScan image shown in the viewer: the description, the doctor and the conclusion
@@ -72,8 +77,14 @@ public class ProScanReportPanel extends JPanel {
   private final JTextArea text = new JTextArea(4, 20);
   private final JButton save = new JButton(ProScanMessages.getString("save"));
   private final JButton saveNext = new JButton(ProScanMessages.getString("save.next"));
+  private final JButton forms = new JButton(ProScanMessages.getString("forms.button"));
+  private final JButton print = new JButton(ProScanMessages.getString("print.button"));
+
+  /** The patient and the examination, as printed on the result. */
+  public record Patient(String name, LocalDate birth, LocalDate date, LocalTime time) {}
 
   private Visit visit;
+  private Patient patient;
   private String patientName;
   private boolean dirty;
   private boolean filling;
@@ -109,6 +120,16 @@ public class ProScanReportPanel extends JPanel {
     text.putClientProperty(
         FlatClientProperties.PLACEHOLDER_TEXT, ProScanMessages.getString("placeholder"));
     text.getDocument().addDocumentListener(new DirtyOnEdit());
+    for (JButton b : List.of(forms, print)) {
+      b.putClientProperty(
+          FlatClientProperties.BUTTON_TYPE, FlatClientProperties.BUTTON_TYPE_BORDERLESS);
+    }
+    forms.setToolTipText(ProScanMessages.getString("forms.tip"));
+    forms.addActionListener(_ -> showForms());
+    print.setToolTipText(ProScanMessages.getString("print.tip"));
+    print.addActionListener(_ -> printReport());
+    add(forms, "newline, span, split 2"); // NON-NLS
+    add(print);
     add(new JScrollPane(text), "newline, span, growx, wmin 0, height 60lp:90lp:"); // NON-NLS
 
     save.addActionListener(_ -> save(false));
@@ -147,7 +168,7 @@ public class ProScanReportPanel extends JPanel {
    * Shows the report of the first image of the series, or hides the panel when it is not a ProScan
    * image. An edited report of the previous visit is offered for saving first.
    */
-  public void setVisit(DicomSeries series, String name) {
+  public void setVisit(DicomSeries series, Patient who) {
     if (dirty && visit != null) {
       int answer =
           JOptionPane.showConfirmDialog(
@@ -162,7 +183,8 @@ public class ProScanReportPanel extends JPanel {
     }
     dirty = false;
     visit = null;
-    patientName = name;
+    patient = who;
+    patientName = who == null ? "" : who.name();
     int current = ++generation;
     Optional<Path> image = proScanImage(series);
     if (image.isEmpty() || !ProScanDatabase.isSupported()) {
@@ -317,7 +339,69 @@ public class ProScanReportPanel extends JPanel {
     return combo.getSelectedItem() instanceof Entry entry ? entry.id() : 0;
   }
 
+  private void showForms() {
+    JPopupMenu menu = new JPopupMenu();
+    for (Form form : ProScanForms.load()) {
+      JMenuItem item = new JMenuItem(form.name());
+      item.addActionListener(_ -> applyForm(form));
+      menu.add(item);
+    }
+    if (menu.getComponentCount() > 0) {
+      menu.addSeparator();
+    }
+    JMenuItem edit = new JMenuItem(ProScanMessages.getString("forms.edit"));
+    edit.addActionListener(_ -> ProScanFormEditor.open(this, conclusionNames()));
+    menu.add(edit);
+    menu.show(forms, 0, forms.getHeight());
+  }
+
+  private List<String> conclusionNames() {
+    List<String> names = new ArrayList<>();
+    for (int i = 0; i < diagnosis.getItemCount(); i++) {
+      Entry entry = diagnosis.getItemAt(i);
+      if (entry != NONE && !names.contains(entry.name())) {
+        names.add(entry.name());
+      }
+    }
+    return names;
+  }
+
+  private void applyForm(Form form) {
+    String current = text.getText().strip();
+    ProScanFormFill.fill(this, form, !current.isEmpty())
+        .ifPresent(
+            result -> {
+              text.setText(
+                  result.replace() || current.isEmpty()
+                      ? result.text()
+                      : current + " " + result.text());
+              List<Entry> entries = new ArrayList<>();
+              for (int i = 0; i < diagnosis.getItemCount(); i++) {
+                entries.add(diagnosis.getItemAt(i));
+              }
+              ProScanForms.matchConclusion(form, entries).ifPresent(diagnosis::setSelectedItem);
+              text.requestFocusInWindow();
+            });
+  }
+
+  private void printReport() {
+    Patient p = patient == null ? new Patient(patientName, null, null, null) : patient;
+    ProScanPrint.print(
+        this,
+        List.of(
+            new ProScanPrint.Sheet(
+                p.name(),
+                p.birth(),
+                p.date(),
+                p.time(),
+                idOf(doctor) == 0 ? "" : String.valueOf(doctor.getSelectedItem()),
+                idOf(diagnosis) == 0 ? "" : String.valueOf(diagnosis.getSelectedItem()),
+                text.getText())));
+  }
+
   private void setEditable(boolean editable) {
+    forms.setEnabled(editable);
+    print.setEnabled(visit != null);
     text.setEditable(editable);
     doctor.setEnabled(editable);
     diagnosis.setEnabled(editable);

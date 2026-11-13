@@ -10,6 +10,8 @@
 package org.weasis.dicom.qr;
 
 import java.awt.Color;
+import java.awt.Dimension;
+import java.awt.Rectangle;
 import java.io.File;
 import java.nio.file.Path;
 import java.time.ZoneId;
@@ -26,7 +28,10 @@ import javax.swing.JPanel;
 import javax.swing.JRadioButton;
 import javax.swing.JScrollPane;
 import javax.swing.JSpinner;
+import javax.swing.JTextArea;
+import javax.swing.Scrollable;
 import javax.swing.SpinnerNumberModel;
+import javax.swing.SwingConstants;
 import javax.swing.UIManager;
 import net.miginfocom.swing.MigLayout;
 import org.weasis.core.api.gui.util.AbstractItemDialogPage;
@@ -40,7 +45,7 @@ import org.weasis.dicom.explorer.proscan.ProScanSettingsPanel;
  * First page of the preferences, in plain words: how the patient list looks, the watched folders
  * and the archives whose studies of the day are pulled in the background.
  */
-public class SourcesView extends AbstractItemDialogPage {
+public class SourcesView extends AbstractItemDialogPage implements Scrollable {
 
   private final DefaultListModel<Path> folders = new DefaultListModel<>();
   private final JList<Path> folderList = new JList<>(folders);
@@ -53,9 +58,7 @@ public class SourcesView extends AbstractItemDialogPage {
     setComponentPosition(-10);
     setLayout(new MigLayout("fill, ins 10, gapy 10", "[grow,fill]", "")); // NON-NLS
 
-    JLabel hint = new JLabel(MultiArchiveMessages.getString("sources.hint"));
-    hint.setForeground(UIManager.getColor("Label.disabledForeground"));
-    add(hint, "wrap"); // NON-NLS
+    add(wrappingText(MultiArchiveMessages.getString("sources.hint")), "growx, wmin 0, wrap");
     add(buildListPanel(), "growx, wrap"); // NON-NLS
 
     add(buildFoldersPanel(), "grow, wrap"); // NON-NLS
@@ -69,7 +72,8 @@ public class SourcesView extends AbstractItemDialogPage {
   }
 
   private JPanel buildListPanel() {
-    JPanel panel = new JPanel(new MigLayout("ins 6, gap 16")); // NON-NLS
+    // One choice per line: side by side, the long labels widen the page beyond its window
+    JPanel panel = new JPanel(new MigLayout("ins 6, wrap 1, gap 2")); // NON-NLS
     panel.setBorder(
         BorderFactory.createTitledBorder(MultiArchiveMessages.getString("basics.list")));
     ButtonGroup group = new ButtonGroup();
@@ -90,6 +94,9 @@ public class SourcesView extends AbstractItemDialogPage {
     JPanel panel = new JPanel(new MigLayout("fill, ins 6", "[grow,fill][]", "[][grow,fill]"));
     panel.setBorder(
         BorderFactory.createTitledBorder(MultiArchiveMessages.getString("sources.folders")));
+    panel.add(
+        wrappingText(MultiArchiveMessages.getString("sources.folders.hint")),
+        "span, growx, wmin 0, wrap"); // NON-NLS
     JButton addFolder = new JButton(MultiArchiveMessages.getString("sources.add"));
     JButton removeFolder = new JButton(MultiArchiveMessages.getString("sources.remove"));
     addFolder.addActionListener(_ -> chooseFolder());
@@ -109,16 +116,19 @@ public class SourcesView extends AbstractItemDialogPage {
   }
 
   private JPanel buildArchivesPanel() {
-    JPanel panel = new JPanel(new MigLayout("fill, ins 6", "[grow,fill]", "[grow,fill][]"));
+    JPanel panel = new JPanel(new MigLayout("fill, ins 6", "[grow,fill]", "[][grow,fill][]"));
     panel.setBorder(
         BorderFactory.createTitledBorder(MultiArchiveMessages.getString("sources.servers")));
+    panel.add(
+        wrappingText(MultiArchiveMessages.getString("sources.servers.hint")),
+        "growx, wmin 0, wrap"); // NON-NLS
     panel.add(new JScrollPane(archivesPanel), "grow, height 80lp:140lp:, wrap"); // NON-NLS
 
     JButton checkNow = new JButton(MultiArchiveMessages.getString("sources.check"));
     checkNow.addActionListener(_ -> checkAll());
     minutes.addChangeListener(
         _ -> ServerWatcher.getInstance().setMinutes((Integer) minutes.getValue()));
-    JPanel footer = new JPanel(new MigLayout("ins 0", "[][][]push[]")); // NON-NLS
+    JPanel footer = new JPanel(new MigLayout("ins 0, fillx", "[][][]push[]")); // NON-NLS
     footer.add(new JLabel(MultiArchiveMessages.getString("sources.every")));
     footer.add(minutes);
     footer.add(new JLabel(MultiArchiveMessages.getString("sources.minutes")));
@@ -189,6 +199,46 @@ public class SourcesView extends AbstractItemDialogPage {
   private static void checkAll() {
     FolderWatcher.pollNow();
     ServerWatcher.getInstance().checkNow();
+  }
+
+  /** A text wrapping to the width of the page, like a label that never widens it. */
+  private static JTextArea wrappingText(String text) {
+    JTextArea area = new JTextArea(text);
+    area.setEditable(false);
+    area.setFocusable(false);
+    area.setOpaque(false);
+    area.setLineWrap(true);
+    area.setWrapStyleWord(true);
+    area.setBorder(BorderFactory.createEmptyBorder());
+    area.setFont(UIManager.getFont("Label.font"));
+    area.setForeground(UIManager.getColor("Label.disabledForeground"));
+    return area;
+  }
+
+  // The page follows the width of the preferences window and only scrolls vertically
+  @Override
+  public Dimension getPreferredScrollableViewportSize() {
+    return getPreferredSize();
+  }
+
+  @Override
+  public int getScrollableUnitIncrement(Rectangle visibleRect, int orientation, int direction) {
+    return 16;
+  }
+
+  @Override
+  public int getScrollableBlockIncrement(Rectangle visibleRect, int orientation, int direction) {
+    return orientation == SwingConstants.VERTICAL ? visibleRect.height : visibleRect.width;
+  }
+
+  @Override
+  public boolean getScrollableTracksViewportWidth() {
+    return true;
+  }
+
+  @Override
+  public boolean getScrollableTracksViewportHeight() {
+    return false;
   }
 
   @Override

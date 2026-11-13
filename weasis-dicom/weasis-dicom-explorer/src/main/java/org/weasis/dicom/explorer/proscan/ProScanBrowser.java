@@ -19,6 +19,7 @@ import java.nio.file.Path;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.time.format.FormatStyle;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
@@ -83,6 +84,7 @@ public final class ProScanBrowser extends JDialog {
   private final JTextField name = new JTextField(14);
   private final JButton find = new JButton(ProScanMessages.getString("browse.find"));
   private final JButton export = new JButton(ProScanMessages.getString("export.open"));
+  private final JButton print = new JButton(ProScanMessages.getString("print.button"));
   private final JLabel count = new JLabel();
   private final Rows rows = new Rows();
   private final JTable table = new JTable(rows);
@@ -109,14 +111,17 @@ public final class ProScanBrowser extends JDialog {
           LocalDate[] days = periodDays();
           ProScanExportDialog.open(this, days[0], days[1]);
         });
-    JPanel top = new JPanel(new MigLayout("ins 8 8 4 8, fillx", "[][][][]push[]")); // NON-NLS
+    print.setToolTipText(ProScanMessages.getString("print.selected"));
+    print.addActionListener(_ -> printSelected());
+    JPanel top = new JPanel(new MigLayout("ins 8 8 4 8, fillx", "[][][][]push[][]")); // NON-NLS
     top.add(period);
     top.add(name, "growx"); // NON-NLS
     top.add(find);
     top.add(count, "gapleft 12"); // NON-NLS
+    top.add(print);
     top.add(export);
 
-    table.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+    table.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
     table.setAutoCreateRowSorter(true);
     table.setFillsViewportHeight(true);
     int[] widths = {80, 50, 220, 80, 120, 200, 320};
@@ -228,6 +233,32 @@ public final class ProScanBrowser extends JDialog {
     return view < 0
         ? Optional.empty()
         : Optional.of(rows.get(table.convertRowIndexToModel(view)));
+  }
+
+  private void printSelected() {
+    int[] views = table.getSelectedRows();
+    if (views.length == 0) {
+      JOptionPane.showMessageDialog(
+          this,
+          ProScanMessages.getString("print.selected"),
+          getTitle(),
+          JOptionPane.INFORMATION_MESSAGE);
+      return;
+    }
+    List<ProScanPrint.Sheet> sheets = new ArrayList<>();
+    for (int view : views) {
+      Row r = rows.get(table.convertRowIndexToModel(view));
+      sheets.add(
+          new ProScanPrint.Sheet(
+              r.patient(),
+              r.birth(),
+              r.date(),
+              r.time(),
+              r.doctor(),
+              r.diagnosis(),
+              r.description()));
+    }
+    ProScanPrint.print(this, sheets);
   }
 
   private void showSelected() {
