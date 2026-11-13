@@ -343,6 +343,8 @@ public class ProScanReportPanel extends JPanel {
     JPopupMenu menu = new JPopupMenu();
     for (Form form : ProScanForms.load()) {
       JMenuItem item = new JMenuItem(form.name());
+      // A form fills the description only when it can be saved
+      item.setEnabled(text.isEditable());
       item.addActionListener(_ -> applyForm(form));
       menu.add(item);
     }
@@ -399,9 +401,8 @@ public class ProScanReportPanel extends JPanel {
                 text.getText())));
   }
 
+  // The form and print buttons stay available: the constructor and printing do not need the record
   private void setEditable(boolean editable) {
-    forms.setEnabled(editable);
-    print.setEnabled(visit != null);
     text.setEditable(editable);
     doctor.setEnabled(editable);
     diagnosis.setEnabled(editable);
