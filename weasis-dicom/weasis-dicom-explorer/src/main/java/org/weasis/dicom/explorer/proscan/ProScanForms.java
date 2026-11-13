@@ -66,8 +66,9 @@ public final class ProScanForms {
 
   /** Where the forms are kept. */
   public static Path location() {
-    return ProScanDatabase.sharedDatabase(FolderWatcher.getWatchedFolders())
-        .map(Path::getParent)
+    List<Path> watched = FolderWatcher.getWatchedFolders();
+    return ProScanDatabase.browsableDatabase(watched)
+        .map(ProScanDatabase::imagesRoot)
         .filter(Files::isWritable)
         .orElse(AppProperties.WEASIS_PATH)
         .resolve(FILE_NAME);

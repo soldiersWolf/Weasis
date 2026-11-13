@@ -108,7 +108,8 @@ public class ProScanSettingsPanel extends JPanel {
           List<String> conclusions = new ArrayList<>();
           if (ProScanDatabase.isSupported()) {
             try {
-              Optional<Path> db = ProScanDatabase.sharedDatabase(FolderWatcher.getWatchedFolders());
+              Optional<Path> db =
+                  ProScanDatabase.browsableDatabase(FolderWatcher.getWatchedFolders());
               if (db.isPresent()) {
                 ProScanReportPanel.DATABASE.catalog(db.get()).diagnoses().stream()
                     .map(ProScanDatabase.Entry::name)
@@ -139,13 +140,20 @@ public class ProScanSettingsPanel extends JPanel {
     // Looking at a network share can be slow
     ProScanReportPanel.EXECUTOR.execute(
         () -> {
-          Optional<Path> db = ProScanDatabase.sharedDatabase(FolderWatcher.getWatchedFolders());
+          List<Path> watched = FolderWatcher.getWatchedFolders();
+          Optional<Path> db = ProScanDatabase.sharedDatabase(watched);
+          // Without the working database, an archive copy can still be browsed and copied
+          String text =
+              db.map(Path::toString)
+                  .or(
+                      () ->
+                          ProScanDatabase.latestCopy(watched)
+                              .map(c -> ProScanMessages.format("settings.database.copy", c)))
+                  .orElse(ProScanMessages.getString("settings.database.none"));
           GuiExecutor.execute(
               () -> {
-                databaseLabel.setText(
-                    db.map(Path::toString)
-                        .orElse(ProScanMessages.getString("settings.database.none")));
-                databaseLabel.setToolTipText(databaseLabel.getText());
+                databaseLabel.setText(text);
+                databaseLabel.setToolTipText(text);
               });
         });
   }

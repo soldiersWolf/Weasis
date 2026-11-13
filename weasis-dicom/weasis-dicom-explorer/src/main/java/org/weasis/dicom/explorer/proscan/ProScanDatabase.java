@@ -122,8 +122,55 @@ public final class ProScanDatabase {
 
   /** The shared database: the one chosen by the user, else the one found by the watched folders. */
   public static Optional<Path> sharedDatabase(List<Path> watchedFolders) {
-    String chosen = LocalPersistence.getProperties().getProperty(P_DATABASE, "");
-    return locate(chosen, watchedFolders);
+    return locate(chosenSetting(), watchedFolders);
+  }
+
+  private static String chosenSetting() {
+    return LocalPersistence.getProperties().getProperty(P_DATABASE, "");
+  }
+
+  /**
+   * A database to read: the shared one, else the archive copy of the most recent daily folder,
+   * which holds every image up to the last one archived. Good for browsing and copies, never for
+   * saving.
+   */
+  public static Optional<Path> browsableDatabase(List<Path> watchedFolders) {
+    return sharedDatabase(watchedFolders).or(() -> latestCopy(watchedFolders));
+  }
+
+  static Optional<Path> latestCopy(List<Path> watchedFolders) {
+    Path best = null;
+    LocalDate bestDay = null;
+    for (Path folder : watchedFolders) {
+      // A watched daily folder stands for its siblings
+      Path root = ProScanBackup.dayOf(folder).isPresent() ? folder.getParent() : folder;
+      if (root == null) {
+        continue;
+      }
+      try (Stream<Path> days = Files.list(root)) {
+        for (Path day : days.filter(Files::isDirectory).toList()) {
+          Optional<LocalDate> date = ProScanBackup.dayOf(day);
+          Path copy = day.resolve(FILE_NAME);
+          if (date.isPresent()
+              && (bestDay == null || date.get().isAfter(bestDay))
+              && Files.isRegularFile(copy)) {
+            best = copy;
+            bestDay = date.get();
+          }
+        }
+      } catch (IOException e) {
+        // An unreachable folder has no copy
+      }
+    }
+    return Optional.ofNullable(best);
+  }
+
+  /** The folder holding the daily image folders of a database or of its archive copy. */
+  public static Path imagesRoot(Path db) {
+    Path folder = db.toAbsolutePath().getParent();
+    return folder != null && ProScanBackup.dayOf(folder).isPresent() && folder.getParent() != null
+        ? folder.getParent()
+        : folder;
   }
 
   static Optional<Path> locate(String chosen, List<Path> watchedFolders) {
@@ -242,12 +289,31 @@ public final class ProScanDatabase {
 
   /** Whether a database lies where ProScan keeps it for this image. */
   public static boolean hasDatabase(Path image) {
-    return candidates(image).stream().anyMatch(Files::isRegularFile);
+    return hasDatabase(image, chosenSetting());
   }
 
-  /** The record of the image, from the shared database or else from the archive copy. */
+  static boolean hasDatabase(Path image, String chosen) {
+    return (chosen != null && !chosen.isBlank())
+        || candidates(image).stream().anyMatch(Files::isRegularFile);
+  }
+
+  /**
+   * The record of the image: from the database chosen in the preferences, else from the shared
+   * database above the daily folders, else from the archive copy, read only.
+   */
   public Optional<Visit> read(Path image) throws IOException {
+    return read(image, chosenSetting());
+  }
+
+  /**
+   * Like {@link #read(Path)}: the database chosen by the user, when there is one, is the one
+   * ProScan works with, such as the database on the ProScan computer itself.
+   */
+  Optional<Visit> read(Path image, String chosen) throws IOException {
     String fileName = image.getFileName().toString();
+    if (chosen != null && !chosen.isBlank()) {
+      return readRecord(Path.of(chosen.strip()), fileName, false);
+    }
     List<Path> places = candidates(image);
     for (Path db : places) {
       if (Files.isRegularFile(db)) {

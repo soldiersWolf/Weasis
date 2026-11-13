@@ -371,7 +371,7 @@ public class PatientListPanel extends JPanel
         .start(
             () -> {
               boolean found =
-                  ProScanDatabase.sharedDatabase(FolderWatcher.getWatchedFolders()).isPresent();
+                  ProScanDatabase.browsableDatabase(FolderWatcher.getWatchedFolders()).isPresent();
               GuiExecutor.execute(() -> proScanButton.setVisible(found));
             });
   }

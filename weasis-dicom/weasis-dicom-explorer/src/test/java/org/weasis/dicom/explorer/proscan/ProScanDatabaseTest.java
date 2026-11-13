@@ -78,7 +78,7 @@ class ProScanDatabaseTest {
         new FakeRunner(
             List.of(List.of("R", "104044", " Легені без змін\r\nСерце в нормі", "4", "5")));
 
-    Visit visit = new ProScanDatabase(runner).read(image).orElseThrow();
+    Visit visit = new ProScanDatabase(runner).read(image, "").orElseThrow();
 
     assertEquals(
         new Visit(db, 104044, IMAGE, "Легені без змін\nСерце в нормі", 4, 5, false), visit);
@@ -93,7 +93,7 @@ class ProScanDatabaseTest {
     Files.createFile(image.getParent().resolve(ProScanDatabase.FILE_NAME));
     FakeRunner runner = new FakeRunner(List.of());
 
-    assertTrue(new ProScanDatabase(runner).read(image).isEmpty());
+    assertTrue(new ProScanDatabase(runner).read(image, "").isEmpty());
     assertEquals(
         List.of(shared.toString()),
         runner.requests.stream().map(r -> r.get("PROSCAN_DB")).toList());
@@ -106,7 +106,7 @@ class ProScanDatabaseTest {
     FakeRunner runner = new FakeRunner(List.of(List.of("R", "9", " Норма", "4", "5")));
     ProScanDatabase database = new ProScanDatabase(runner);
 
-    Visit visit = database.read(image).orElseThrow();
+    Visit visit = database.read(image, "").orElseThrow();
 
     assertEquals(copy, visit.database());
     assertTrue(visit.archiveCopy());
@@ -119,9 +119,9 @@ class ProScanDatabaseTest {
     Path image = image();
     FakeRunner runner = new FakeRunner(List.of());
 
-    assertTrue(new ProScanDatabase(runner).read(image).isEmpty());
+    assertTrue(new ProScanDatabase(runner).read(image, "").isEmpty());
     assertTrue(runner.requests.isEmpty());
-    assertFalse(ProScanDatabase.hasDatabase(image));
+    assertFalse(ProScanDatabase.hasDatabase(image, ""));
   }
 
   @Test
@@ -265,5 +265,34 @@ class ProScanDatabaseTest {
 
     assertEquals(Optional.of(image), ProScanDatabase.imageFile(root, row));
     assertEquals(Optional.of(image), ProScanDatabase.imageFile(root, elsewhere));
+  }
+  @Test
+  void readsOnlyTheDatabaseChosenInThePreferences() throws IOException {
+    Path image = image();
+    Files.createFile(root.resolve(ProScanDatabase.FILE_NAME));
+    Path chosen = root.resolve("ProScanPC").resolve(ProScanDatabase.FILE_NAME);
+    FakeRunner runner = new FakeRunner(List.of(List.of("R", "3", " Норма", "4", "5")));
+
+    Visit visit = new ProScanDatabase(runner).read(image, chosen.toString()).orElseThrow();
+
+    assertEquals(chosen, visit.database());
+    assertFalse(visit.archiveCopy());
+    assertEquals(chosen.toString(), runner.requests.getFirst().get("PROSCAN_DB"));
+    assertTrue(ProScanDatabase.hasDatabase(root.resolve("x.dcm"), chosen.toString()));
+  }
+
+  @Test
+  void browsesTheCopyOfTheMostRecentDayWithoutASharedDatabase() throws IOException {
+    for (String day : List.of("11-Nov-2026", "13-Nov-2026", "12-Nov-2026", "Export")) {
+      Path folder = Files.createDirectories(root.resolve(day));
+      Files.createFile(folder.resolve(ProScanDatabase.FILE_NAME));
+    }
+    Path latest = root.resolve("13-Nov-2026").resolve(ProScanDatabase.FILE_NAME);
+
+    assertEquals(Optional.of(latest), ProScanDatabase.latestCopy(List.of(root)));
+    assertEquals(
+        Optional.of(latest), ProScanDatabase.latestCopy(List.of(root.resolve("11-Nov-2026"))));
+    assertEquals(root, ProScanDatabase.imagesRoot(latest));
+    assertEquals(root, ProScanDatabase.imagesRoot(root.resolve(ProScanDatabase.FILE_NAME)));
   }
 }

@@ -149,7 +149,7 @@ public final class ProScanExportDialog extends JDialog {
 
   /** Opens the copy of a period, the given days by default. */
   public static void open(Component parent, LocalDate from, LocalDate to) {
-    Optional<Path> db = ProScanDatabase.sharedDatabase(FolderWatcher.getWatchedFolders());
+    Optional<Path> db = ProScanDatabase.browsableDatabase(FolderWatcher.getWatchedFolders());
     if (db.isEmpty()) {
       JOptionPane.showMessageDialog(
           parent,

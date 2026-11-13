@@ -177,7 +177,7 @@ public final class ProScanBrowser extends JDialog {
       instance.toFront();
       return;
     }
-    Optional<Path> db = ProScanDatabase.sharedDatabase(FolderWatcher.getWatchedFolders());
+    Optional<Path> db = ProScanDatabase.browsableDatabase(FolderWatcher.getWatchedFolders());
     String problem =
         !ProScanDatabase.isSupported()
             ? ProScanMessages.getString("error.os")
@@ -274,7 +274,8 @@ public final class ProScanBrowser extends JDialog {
             row ->
                 ProScanReportPanel.EXECUTOR.execute(
                     () -> {
-                      Optional<Path> file = ProScanDatabase.imageFile(database.getParent(), row);
+                      Optional<Path> file =
+                          ProScanDatabase.imageFile(ProScanDatabase.imagesRoot(database), row);
                       GuiExecutor.execute(
                           () -> {
                             if (file.isPresent()) {

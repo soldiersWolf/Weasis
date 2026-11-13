@@ -122,7 +122,7 @@ public final class ProScanBackup {
       throws IOException, InterruptedException {
     List<Path> images = new ArrayList<>();
     if (content.images()) {
-      for (Path day : dayFolders(db.getParent(), from, to)) {
+      for (Path day : dayFolders(ProScanDatabase.imagesRoot(db), from, to)) {
         try (Stream<Path> files = Files.list(day)) {
           files.filter(Files::isRegularFile)
               .filter(f -> !f.getFileName().toString().equalsIgnoreCase(ProScanDatabase.FILE_NAME))
