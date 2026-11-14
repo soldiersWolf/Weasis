@@ -24,8 +24,15 @@ import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import org.weasis.core.api.gui.util.AppProperties;
+import org.weasis.dicom.explorer.proscan.ProScanDatabase.BusyException;
+import org.weasis.dicom.explorer.proscan.ProScanDatabase.UnavailableException;
 
 /**
  * Opens the ProScan database through the Jet engine shipped with Windows. ProScan is a Jet 3
@@ -36,7 +43,9 @@ import org.weasis.core.api.gui.util.AppProperties;
 final class JetRunner implements ProScanDatabase.Runner {
 
   private static final String SCRIPT = "jet.ps1"; // NON-NLS
-  private static final long TIMEOUT_SECONDS = 60;
+  private static final long REACH_SECONDS = 5;
+  private static final ExecutorService REACH_EXECUTOR =
+      Executors.newCachedThreadPool(Thread.ofVirtual().name("ProScan reach").factory()); // NON-NLS
 
   private Path script;
 
@@ -57,6 +66,9 @@ final class JetRunner implements ProScanDatabase.Runner {
   public List<List<String>> run(Map<String, String> args) throws IOException {
     Path exe =
         executable().orElseThrow(() -> new IOException(ProScanMessages.getString("error.os")));
+    Path db = Path.of(args.get("PROSCAN_DB"));
+    boolean write = "write".equals(args.get("PROSCAN_MODE")); // NON-NLS
+    checkReachable(db);
     ProcessBuilder builder =
         new ProcessBuilder(
             exe.toString(),
@@ -68,6 +80,9 @@ final class JetRunner implements ProScanDatabase.Runner {
             "-File", // NON-NLS
             script().toString());
     builder.redirectErrorStream(true);
+    // Written to a file, so that a request hanging on the network can be given up
+    Path output = Files.createTempFile(AppProperties.FILE_CACHE_DIR, "proscan-", ".out"); // NON-NLS
+    builder.redirectOutput(output.toFile());
     // Base64 keeps any character of a description out of reach of the console code page
     args.forEach(
         (key, value) ->
@@ -76,24 +91,72 @@ final class JetRunner implements ProScanDatabase.Runner {
                 .put(
                     key,
                     Base64.getEncoder().encodeToString(value.getBytes(StandardCharsets.UTF_8))));
-    Process process = builder.start();
-    List<String> lines = readLines(process.getInputStream());
     try {
-      if (!process.waitFor(TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+      Process process = builder.start();
+      try {
+        if (!process.waitFor(timeoutSeconds(args.get("PROSCAN_MODE")), TimeUnit.SECONDS)) {
+          process.destroyForcibly();
+          throw new UnavailableException(
+              ProScanMessages.format("error.timeout", args.get("PROSCAN_DB")));
+        }
+      } catch (InterruptedException e) {
         process.destroyForcibly();
-        throw new IOException(ProScanMessages.getString("error.timeout"));
+        Thread.currentThread().interrupt();
+        throw new IOException(e);
       }
+      List<String> lines;
+      try (InputStream in = Files.newInputStream(output)) {
+        lines = readLines(in);
+      }
+      List<List<String>> rows;
+      try {
+        rows = ProScanDatabase.parse(lines);
+      } catch (BusyException e) {
+        throw e;
+      } catch (IOException e) {
+        // Jet writes a lock file next to the database: a read-only folder refuses any change
+        if (write && db.getParent() != null && !Files.isWritable(db.getParent())) {
+          throw new IOException(ProScanMessages.format("error.readonly", db.getParent()), e);
+        }
+        throw e;
+      }
+      if (process.exitValue() != 0) {
+        // PowerShell failed before the script could report it, e.g. blocked by a policy
+        throw new IOException(String.join(" ", lines).strip());
+      }
+      return rows;
+    } finally {
+      Files.deleteIfExists(output);
+    }
+  }
+
+  /** Time given to a request: browsing or copying a long period reads many records. */
+  static long timeoutSeconds(String mode) {
+    return "browse".equals(mode) ? 180 : 20; // NON-NLS
+  }
+
+  /**
+   * Tells at once when the database cannot be reached: Jet itself would wait for the network for
+   * minutes. A computer that is off is noticed within a few seconds.
+   */
+  static void checkReachable(Path db) throws IOException {
+    CompletableFuture<Boolean> look =
+        CompletableFuture.supplyAsync(() -> Files.isRegularFile(db), REACH_EXECUTOR);
+    boolean exists;
+    try {
+      exists = look.get(REACH_SECONDS, TimeUnit.SECONDS);
+    } catch (TimeoutException e) {
+      look.cancel(true);
+      throw new UnavailableException(ProScanMessages.format("error.unreachable", db));
     } catch (InterruptedException e) {
-      process.destroyForcibly();
       Thread.currentThread().interrupt();
       throw new IOException(e);
+    } catch (ExecutionException e) {
+      throw new UnavailableException(ProScanMessages.format("error.unreachable", db));
     }
-    List<List<String>> rows = ProScanDatabase.parse(lines);
-    if (process.exitValue() != 0) {
-      // PowerShell failed before the script could report it, e.g. blocked by a policy
-      throw new IOException(String.join(" ", lines).strip());
+    if (!exists) {
+      throw new UnavailableException(ProScanMessages.format("error.nofile", db));
     }
-    return rows;
   }
 
   private static List<String> readLines(InputStream in) throws IOException {

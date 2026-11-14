@@ -1,4 +1,4 @@
-# Copyright (c) 2026 Weasis Team and other contributors.
+﻿# Copyright (c) 2026 Weasis Team and other contributors.
 # SPDX-License-Identifier: EPL-2.0 OR Apache-2.0
 #
 # Reads and writes the ProScan database through the Jet engine of Windows, which honors the record
@@ -74,6 +74,11 @@ try {
               $reader.GetValue(3))
           }
         } finally { $reader.Close() }
+      }
+      'check' {
+        $command = $connection.CreateCommand()
+        $command.CommandText = 'SELECT COUNT(*) FROM FluorTab'
+        Write-Line @('K', $command.ExecuteScalar())
       }
       'catalog' {
         Write-Rows $connection 'D' 'SELECT ID, FIO FROM DoctorsSPR ORDER BY FIO'
@@ -156,6 +161,18 @@ try {
     }
   } finally { $connection.Close() }
 } catch {
-  Write-Line @('E', $_.Exception.Message)
+  # Tell a database busy with another program, worth trying again, from any other error. Jet
+  # numbers its lock errors; its messages are translated, hence the numbers first
+  $busyCodes = @(3006, 3008, 3009, 3045, 3050, 3186, 3187, 3188, 3189, 3197, 3202, 3211, 3212,
+    3218, 3260)
+  $busy = $false
+  $exception = $_.Exception
+  if ($exception -is [System.Data.OleDb.OleDbException]) {
+    foreach ($err in $exception.Errors) {
+      if ($busyCodes -contains [math]::Abs([int]$err.NativeError)) { $busy = $true }
+    }
+  }
+  if ($exception.Message -match 'locked|in use|блок|занят|використовуєт') { $busy = $true }
+  Write-Line @('E', $exception.Message, $(if ($busy) { '1' } else { '0' }))
   exit 2
 }

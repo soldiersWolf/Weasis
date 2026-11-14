@@ -92,7 +92,25 @@ public final class ProScanDatabase {
     }
   }
 
-  private static final int ATTEMPTS = 3;
+  /** The database is in use by another program for a moment: worth trying again. */
+  public static final class BusyException extends IOException {
+    BusyException(String message) {
+      super(message);
+    }
+  }
+
+  /** The database cannot be reached: its computer is off, or the network or the share is down. */
+  public static final class UnavailableException extends IOException {
+    UnavailableException(String message) {
+      super(message);
+    }
+  }
+
+  /** Outcome of a check of a database: the images it holds and the time it took to answer. */
+  public record Check(long images, long millis) {}
+
+  // Pauses before each new attempt on a busy database: about 6 s in all
+  private static final long[] BUSY_PAUSES = {500, 1000, 1800, 2700};
 
   /** A line of the database browser: an image with its patient and its report. */
   public record Row(
@@ -454,27 +472,37 @@ public final class ProScanDatabase {
   }
 
   /**
-   * Runs a request, again a little later when it fails: ProScan and other computers use the
-   * database at the same time, and Jet refuses a record or page while another program writes it.
+   * Runs a request, and again a little later only while the database is busy: ProScan and other
+   * computers use it at the same time, and Jet refuses a record another program is writing. Any
+   * other error, such as an unreachable computer, is reported at once.
    */
   private List<List<String>> run(Map<String, String> args) throws IOException {
-    IOException last = null;
-    for (int attempt = 1; attempt <= ATTEMPTS; attempt++) {
+    for (int attempt = 0; ; attempt++) {
       try {
         return runner.run(args);
-      } catch (IOException e) {
-        last = e;
-        if (attempt < ATTEMPTS) {
-          try {
-            Thread.sleep(700L * attempt);
-          } catch (InterruptedException ie) {
-            Thread.currentThread().interrupt();
-            throw e;
-          }
+      } catch (BusyException e) {
+        if (attempt >= BUSY_PAUSES.length) {
+          throw new IOException(ProScanMessages.getString("error.busy"), e);
+        }
+        try {
+          Thread.sleep(BUSY_PAUSES[attempt]);
+        } catch (InterruptedException ie) {
+          Thread.currentThread().interrupt();
+          throw e;
         }
       }
     }
-    throw last;
+  }
+
+  /** Opens the database and counts its images, to tell whether it can be used from here. */
+  public Check check(Path db) throws IOException {
+    long start = System.nanoTime();
+    for (List<String> line : run(args("check", db, null))) { // NON-NLS
+      if (line.size() >= 2 && "K".equals(line.getFirst())) {
+        return new Check(toInt(line.get(1)), (System.nanoTime() - start) / 1_000_000);
+      }
+    }
+    throw new IOException(ProScanMessages.getString("error.gone"));
   }
 
   private static Map<String, String> args(String mode, Path db, String fileName) {
@@ -539,7 +567,10 @@ public final class ProScanDatabase {
         continue;
       }
       if ("E".equals(fields.getFirst())) {
-        throw new IOException(fields.size() > 1 ? fields.get(1) : "?");
+        String message = fields.size() > 1 ? fields.get(1) : "?";
+        throw fields.size() > 2 && "1".equals(fields.get(2))
+            ? new BusyException(message)
+            : new IOException(message);
       }
       rows.add(fields);
     }

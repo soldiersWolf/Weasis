@@ -185,7 +185,7 @@ class ProScanDatabaseTest {
     ProScanDatabase.Runner busyOnce =
         args -> {
           if (calls[0]++ == 0) {
-            throw new IOException("Could not update; currently locked.");
+            throw new ProScanDatabase.BusyException("Could not update; currently locked.");
           }
           return List.of(List.of("N", "1"));
         };
@@ -194,6 +194,43 @@ class ProScanDatabaseTest {
     new ProScanDatabase(busyOnce).write(visit, "Норма", 3, 254);
 
     assertEquals(2, calls[0]);
+  }
+
+  @Test
+  void reportsAnyOtherErrorAtOnce() {
+    int[] calls = {0};
+    ProScanDatabase.Runner unreachable =
+        args -> {
+          calls[0]++;
+          throw new ProScanDatabase.UnavailableException("No answer");
+        };
+    Visit visit = new Visit(root.resolve("patients2.mdb"), 7, IMAGE, "", 4, 5, false, " ");
+
+    assertThrows(
+        ProScanDatabase.UnavailableException.class,
+        () -> new ProScanDatabase(unreachable).write(visit, "Норма", 3, 254));
+    assertEquals(1, calls[0]);
+  }
+
+  @Test
+  void tellsABusyDatabaseFromOtherErrors() {
+    assertThrows(
+        ProScanDatabase.BusyException.class,
+        () -> ProScanDatabase.parse(List.of(b64("E") + " " + b64("locked") + " " + b64("1"))));
+    IOException other =
+        assertThrows(
+            IOException.class,
+            () ->
+                ProScanDatabase.parse(List.of(b64("E") + " " + b64("Bad path") + " " + b64("0"))));
+    assertFalse(other instanceof ProScanDatabase.BusyException);
+  }
+
+  @Test
+  void countsTheImagesWhenCheckingADatabase() throws IOException {
+    FakeRunner runner = new FakeRunner(List.of(List.of("K", "99651")));
+
+    assertEquals(99651, new ProScanDatabase(runner).check(root.resolve("db.mdb")).images());
+    assertEquals("check", runner.requests.getFirst().get("PROSCAN_MODE"));
   }
 
   @Test

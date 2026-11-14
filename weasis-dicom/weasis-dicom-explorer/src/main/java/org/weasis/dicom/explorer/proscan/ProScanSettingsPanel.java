@@ -9,6 +9,8 @@
  */
 package org.weasis.dicom.explorer.proscan;
 
+import com.formdev.flatlaf.FlatClientProperties;
+import java.awt.Color;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.time.LocalDate;
@@ -21,6 +23,7 @@ import javax.swing.JFileChooser;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JTextField;
+import javax.swing.UIManager;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
 import javax.swing.filechooser.FileNameExtensionFilter;
@@ -37,6 +40,8 @@ import org.weasis.dicom.explorer.LocalPersistence;
 public class ProScanSettingsPanel extends JPanel {
 
   private final JLabel databaseLabel = new JLabel();
+  private final JLabel checkResult = new JLabel();
+  private final JButton check = new JButton(ProScanMessages.getString("settings.check"));
 
   public ProScanSettingsPanel() {
     // Each row is short, so that the page fits a narrow preferences window
@@ -54,8 +59,12 @@ public class ProScanSettingsPanel extends JPanel {
         });
     add(new JLabel(ProScanMessages.getString("settings.database")));
     add(databaseLabel, "wmin 0"); // NON-NLS
-    add(chooseDb, "skip, split 2"); // NON-NLS
+    add(chooseDb, "skip, split 3"); // NON-NLS
     add(autoDb);
+    check.addActionListener(_ -> checkDatabase());
+    add(check);
+    checkResult.putClientProperty(FlatClientProperties.STYLE_CLASS, "small"); // NON-NLS
+    add(checkResult, "skip, wmin 0"); // NON-NLS
 
     JButton browse = new JButton(ProScanMessages.getString("settings.browse"));
     browse.addActionListener(_ -> ProScanBrowser.open(this));
@@ -99,6 +108,49 @@ public class ProScanSettingsPanel extends JPanel {
 
     FolderWatcher.addChangeListener(() -> GuiExecutor.execute(this::refreshDatabase));
     refreshDatabase();
+  }
+
+  /** Opens the database as the report panel would, and tells what is wrong in plain words. */
+  private void checkDatabase() {
+    check.setEnabled(false);
+    showCheck(ProScanMessages.getString("settings.check.running"), false);
+    ProScanReportPanel.EXECUTOR.execute(
+        () -> {
+          String message;
+          boolean error;
+          try {
+            Path db =
+                ProScanDatabase.browsableDatabase(FolderWatcher.getWatchedFolders())
+                    .orElseThrow(() -> new IOException(ProScanMessages.getString("backup.nodb")));
+            ProScanDatabase.Check result = ProScanReportPanel.DATABASE.check(db);
+            message =
+                ProScanMessages.format(
+                    "settings.check.ok",
+                    result.images(),
+                    String.format("%.1f", result.millis() / 1000.0)); // NON-NLS
+            error = false;
+          } catch (IOException e) {
+            message = e.getMessage();
+            error = true;
+          }
+          String text = message;
+          boolean failed = error;
+          GuiExecutor.execute(
+              () -> {
+                showCheck(text, failed);
+                check.setEnabled(true);
+              });
+        });
+  }
+
+  private void showCheck(String message, boolean error) {
+    checkResult.setText(message);
+    checkResult.setToolTipText(message);
+    Color color =
+        error
+            ? UIManager.getColor("Component.error.focusedBorderColor")
+            : UIManager.getColor("Label.disabledForeground");
+    checkResult.setForeground(color != null ? color : error ? Color.RED : Color.GRAY);
   }
 
   /** Opens the form constructor with the conclusions of ProScan, read in the background. */
