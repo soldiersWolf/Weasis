@@ -74,7 +74,7 @@ class ProScanBackupTest {
   }
 
   @Test
-  void savesTheImagesOfThePeriodWithTheSharedDatabaseAndTheReports() throws Exception {
+  void laysOutTheCopyLikeTheProScanFolder() throws Exception {
     Path db = proScanFolder();
     Path target = dir.resolve(ProScanBackup.defaultName(NOV_11, NOV_12));
     Row report =
@@ -98,13 +98,16 @@ class ProScanBackupTest {
     assertEquals(
         List.of(
             "11-Nov-2026/TestovyiTT11-Nov-2026.dcm",
+            "11-Nov-2026/patients2.mdb",
             "12-Nov-2026/TestovyiTT12-Nov-2026.dcm",
+            "12-Nov-2026/patients2.mdb",
             ProScanDatabase.FILE_NAME,
             ProScanBackup.REPORTS_NAME),
         List.copyOf(entries.keySet()));
     assertEquals("shared database", entries.get(ProScanDatabase.FILE_NAME));
+    assertEquals("archive copy", entries.get("12-Nov-2026/patients2.mdb"));
     assertTrue(entries.get(ProScanBackup.REPORTS_NAME).contains("\"Тестовий Т.\""));
-    assertEquals(List.of(0, 1, 2, 3, 4), progress);
+    assertEquals(List.of(0, 1, 2, 3, 4, 5, 6), progress);
   }
 
   @Test
@@ -123,7 +126,9 @@ class ProScanBackupTest {
             (done, total) -> {},
             () -> false);
 
-    assertEquals(List.of(ProScanDatabase.FILE_NAME), List.copyOf(unzip(written).keySet()));
+    assertEquals(
+        List.of("12-Nov-2026/patients2.mdb", ProScanDatabase.FILE_NAME),
+        List.copyOf(unzip(written).keySet()));
   }
 
   @Test

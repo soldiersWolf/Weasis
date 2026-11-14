@@ -36,8 +36,9 @@ import org.slf4j.LoggerFactory;
 import org.weasis.dicom.explorer.proscan.ProScanDatabase.Row;
 
 /**
- * Zip copy of a period chosen by the user: the daily image folders of the period, the database
- * that ProScan and its viewer need to open them, and a table of the reports readable in Excel.
+ * Zip copy of a period chosen by the user, laid out like the ProScan folder: the daily folders of
+ * the period with their images and their database, which ProScan and its viewer need to open
+ * them, and a table of the reports readable in Excel.
  */
 public final class ProScanBackup {
   private static final Logger LOGGER = LoggerFactory.getLogger(ProScanBackup.class);
@@ -120,18 +121,24 @@ public final class ProScanBackup {
       Progress progress,
       BooleanSupplier cancelled)
       throws IOException, InterruptedException {
-    List<Path> images = new ArrayList<>();
-    if (content.images()) {
-      for (Path day : dayFolders(ProScanDatabase.imagesRoot(db), from, to)) {
-        try (Stream<Path> files = Files.list(day)) {
-          files.filter(Files::isRegularFile)
-              .filter(f -> !f.getFileName().toString().equalsIgnoreCase(ProScanDatabase.FILE_NAME))
-              .sorted()
-              .forEach(images::add);
-        }
+    // The copy is laid out like the ProScan folder: every daily folder with its images and its
+    // database, and the shared database above them when there is one
+    Path root = ProScanDatabase.imagesRoot(db);
+    List<Path> files = new ArrayList<>();
+    for (Path day : dayFolders(root, from, to)) {
+      try (Stream<Path> children = Files.list(day)) {
+        children
+            .filter(Files::isRegularFile)
+            .filter(f -> isDatabase(f) ? content.database() : content.images())
+            .sorted()
+            .forEach(files::add);
       }
     }
-    int total = images.size() + (content.database() ? 1 : 0) + (content.reports() ? 1 : 0);
+    Path shared = root.resolve(ProScanDatabase.FILE_NAME);
+    if (content.database() && Files.isRegularFile(shared)) {
+      files.add(shared);
+    }
+    int total = files.size() + (content.reports() ? 1 : 0);
     int done = 0;
     progress.update(done, total);
 
@@ -139,24 +146,24 @@ public final class ProScanBackup {
     try {
       try (OutputStream out = Files.newOutputStream(partial);
           ZipOutputStream zip = new ZipOutputStream(out)) {
-        // The images are JPEG 2000 already: compressing them again only costs time
-        zip.setLevel(Deflater.BEST_SPEED);
-        for (Path image : images) {
+        for (Path file : files) {
           checkCancelled(cancelled);
-          ZipEntry entry =
-              new ZipEntry(image.getParent().getFileName() + "/" + image.getFileName());
-          entry.setLastModifiedTime(Files.getLastModifiedTime(image));
-          zip.putNextEntry(entry);
-          Files.copy(image, zip);
-          zip.closeEntry();
+          String name = root.relativize(file).toString().replace('\\', '/');
+          if (isDatabase(file)) {
+            zip.setLevel(Deflater.DEFAULT_COMPRESSION);
+            addDatabase(zip, file, name, workDir);
+          } else {
+            // The images are JPEG 2000 already: compressing them again only costs time
+            zip.setLevel(Deflater.BEST_SPEED);
+            ZipEntry entry = new ZipEntry(name);
+            entry.setLastModifiedTime(Files.getLastModifiedTime(file));
+            zip.putNextEntry(entry);
+            Files.copy(file, zip);
+            zip.closeEntry();
+          }
           progress.update(++done, total);
         }
         zip.setLevel(Deflater.DEFAULT_COMPRESSION);
-        if (content.database()) {
-          checkCancelled(cancelled);
-          addDatabase(zip, db, workDir);
-          progress.update(++done, total);
-        }
         if (content.reports()) {
           zip.putNextEntry(new ZipEntry(REPORTS_NAME));
           zip.write(toCsv(reports).getBytes(StandardCharsets.UTF_8));
@@ -178,12 +185,16 @@ public final class ProScanBackup {
     }
   }
 
-  private static void addDatabase(ZipOutputStream zip, Path db, Path workDir)
+  private static boolean isDatabase(Path file) {
+    return file.getFileName().toString().equalsIgnoreCase(ProScanDatabase.FILE_NAME);
+  }
+
+  private static void addDatabase(ZipOutputStream zip, Path db, String name, Path workDir)
       throws IOException, InterruptedException {
     Path snapshot = Files.createTempFile(workDir, "proscan-", ".mdb"); // NON-NLS
     try {
       FileTime modified = copyStable(db, snapshot);
-      ZipEntry entry = new ZipEntry(db.getFileName().toString());
+      ZipEntry entry = new ZipEntry(name);
       entry.setLastModifiedTime(modified);
       zip.putNextEntry(entry);
       Files.copy(snapshot, zip);
