@@ -17,6 +17,8 @@ import java.nio.file.Path;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneId;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -295,8 +297,13 @@ public final class FolderWatcher {
     return s != null && s.modified() >= cutoff().toEpochMilli();
   }
 
+  /**
+   * Start of the window in whole days: with 3 days, from midnight of the day before yesterday, so
+   * that the first images of the oldest day are not left out in the evening.
+   */
   private Instant cutoff() {
-    return Instant.now().minus(window);
+    long days = Math.max(1, window.toDays());
+    return LocalDate.now().minusDays(days - 1).atStartOfDay(ZoneId.systemDefault()).toInstant();
   }
 
   private static FileState state(Path file) {
