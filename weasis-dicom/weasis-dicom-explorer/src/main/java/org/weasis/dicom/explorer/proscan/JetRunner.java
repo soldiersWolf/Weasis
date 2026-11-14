@@ -11,9 +11,11 @@ package org.weasis.dicom.explorer.proscan;
 
 import com.formdev.flatlaf.util.SystemInfo;
 import java.io.BufferedReader;
+import java.io.BufferedWriter;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.OutputStreamWriter;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -24,30 +26,65 @@ import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.stream.Collectors;
 import org.weasis.core.api.gui.util.AppProperties;
+import org.weasis.core.api.util.ThreadUtil;
 import org.weasis.dicom.explorer.proscan.ProScanDatabase.BusyException;
 import org.weasis.dicom.explorer.proscan.ProScanDatabase.UnavailableException;
 
 /**
  * Opens the ProScan database through the Jet engine shipped with Windows. ProScan is a Jet 3
  * (Access 97) application: going through Jet, rather than writing the file directly, keeps the
- * record locks it shares with ProScan. Jet exists only in 32 bits, so the request runs in the
+ * record locks it shares with ProScan. Jet exists only in 32 bits, so the requests run in the
  * 32-bit PowerShell of Windows, and nothing has to be installed.
+ *
+ * <p>Starting PowerShell takes seconds on a small computer, so one PowerShell is kept running as
+ * a worker that answers the requests one after another, and stopped after a few idle minutes to
+ * give its memory back.
  */
 final class JetRunner implements ProScanDatabase.Runner {
 
   private static final String SCRIPT = "jet.ps1"; // NON-NLS
+  private static final String END = "."; // NON-NLS
+  // Put in the queue when the worker stops; never a line of the worker
+  private static final String STOPPED = "\u0000stopped"; // NON-NLS
   private static final long REACH_SECONDS = 5;
+  private static final long IDLE_MILLIS = 3 * 60_000L;
   private static final ExecutorService REACH_EXECUTOR =
       Executors.newCachedThreadPool(Thread.ofVirtual().name("ProScan reach").factory()); // NON-NLS
+  private static final ScheduledExecutorService IDLE_CHECK =
+      Executors.newSingleThreadScheduledExecutor(
+          ThreadUtil.namedDaemonThreadFactory("ProScan worker idle", true)); // NON-NLS
 
   private Path script;
+  private volatile Process worker;
+  private BufferedWriter toWorker;
+  private BlockingQueue<String> fromWorker;
+  private long lastUse;
+
+  JetRunner() {
+    IDLE_CHECK.scheduleWithFixedDelay(this::stopIfIdle, 1, 1, TimeUnit.MINUTES);
+    // Without the lock: a request may hold it while the application closes
+    Runtime.getRuntime()
+        .addShutdownHook(
+            new Thread(
+                () -> {
+                  Process running = worker;
+                  if (running != null) {
+                    running.destroyForcibly();
+                  }
+                },
+                "ProScan worker stop")); // NON-NLS
+  }
 
   /** The 32-bit PowerShell, absent outside Windows. */
   static Optional<Path> executable() {
@@ -63,12 +100,84 @@ final class JetRunner implements ProScanDatabase.Runner {
   }
 
   @Override
-  public List<List<String>> run(Map<String, String> args) throws IOException {
-    Path exe =
-        executable().orElseThrow(() -> new IOException(ProScanMessages.getString("error.os")));
+  public synchronized List<List<String>> run(Map<String, String> args) throws IOException {
     Path db = Path.of(args.get("PROSCAN_DB"));
     boolean write = "write".equals(args.get("PROSCAN_MODE")); // NON-NLS
     checkReachable(db);
+    startWorker();
+    lastUse = System.currentTimeMillis();
+    try {
+      toWorker.write(requestLine(args));
+      toWorker.newLine();
+      toWorker.flush();
+    } catch (IOException e) {
+      stopWorker();
+      throw new IOException(ProScanMessages.getString("error.worker"), e);
+    }
+    List<String> lines = readAnswer(args);
+    lastUse = System.currentTimeMillis();
+    try {
+      return ProScanDatabase.parse(lines);
+    } catch (BusyException e) {
+      throw e;
+    } catch (IOException e) {
+      // Jet writes a lock file next to the database: a read-only folder refuses any change
+      if (write && db.getParent() != null && !Files.isWritable(db.getParent())) {
+        throw new IOException(ProScanMessages.format("error.readonly", db.getParent()), e);
+      }
+      throw e;
+    }
+  }
+
+  /** The arguments as one line: KEY=value pairs, each value in Base64 of UTF-8. */
+  static String requestLine(Map<String, String> args) {
+    return args.entrySet().stream()
+        .map(
+            e ->
+                e.getKey()
+                    + "="
+                    + Base64.getEncoder()
+                        .encodeToString(e.getValue().getBytes(StandardCharsets.UTF_8)))
+        .collect(Collectors.joining(" "));
+  }
+
+  private List<String> readAnswer(Map<String, String> args) throws IOException {
+    List<String> lines = new ArrayList<>();
+    long deadline =
+        System.currentTimeMillis() + timeoutSeconds(args.get("PROSCAN_MODE")) * 1000L;
+    try {
+      while (true) {
+        long left = deadline - System.currentTimeMillis();
+        String line = left > 0 ? fromWorker.poll(left, TimeUnit.MILLISECONDS) : null;
+        if (line == null) {
+          // A request hanging on the network: the worker is stopped and started again next time
+          stopWorker();
+          throw new UnavailableException(
+              ProScanMessages.format("error.timeout", args.get("PROSCAN_DB")));
+        }
+        if (STOPPED.equals(line)) {
+          stopWorker();
+          throw new IOException(
+              ProScanMessages.getString("error.worker") + " " + String.join(" ", lines));
+        }
+        if (END.equals(line)) {
+          return lines;
+        }
+        lines.add(line);
+      }
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      stopWorker();
+      throw new IOException(e);
+    }
+  }
+
+  private void startWorker() throws IOException {
+    if (worker != null && worker.isAlive()) {
+      return;
+    }
+    Path exe =
+        executable().orElseThrow(() -> new IOException(ProScanMessages.getString("error.os")));
     ProcessBuilder builder =
         new ProcessBuilder(
             exe.toString(),
@@ -80,53 +189,49 @@ final class JetRunner implements ProScanDatabase.Runner {
             "-File", // NON-NLS
             script().toString());
     builder.redirectErrorStream(true);
-    // Written to a file, so that a request hanging on the network can be given up
-    Path output = Files.createTempFile(AppProperties.FILE_CACHE_DIR, "proscan-", ".out"); // NON-NLS
-    builder.redirectOutput(output.toFile());
-    // Base64 keeps any character of a description out of reach of the console code page
-    args.forEach(
-        (key, value) ->
-            builder
-                .environment()
-                .put(
-                    key,
-                    Base64.getEncoder().encodeToString(value.getBytes(StandardCharsets.UTF_8))));
-    try {
-      Process process = builder.start();
+    builder.environment().put("PROSCAN_SERVER", "1"); // NON-NLS
+    Process process = builder.start();
+    BlockingQueue<String> queue = new LinkedBlockingQueue<>();
+    // The worker writes ASCII; messages of PowerShell itself come in the console code page
+    Thread.ofVirtual()
+        .name("ProScan worker output") // NON-NLS
+        .start(
+            () -> {
+              try (BufferedReader reader =
+                  new BufferedReader(
+                      new InputStreamReader(process.getInputStream(), Charset.defaultCharset()))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                  queue.add(line);
+                }
+              } catch (IOException e) {
+                // The worker stopped
+              }
+              queue.add(STOPPED);
+            });
+    worker = process;
+    fromWorker = queue;
+    toWorker =
+        new BufferedWriter(
+            new OutputStreamWriter(process.getOutputStream(), StandardCharsets.US_ASCII));
+  }
+
+  private synchronized void stopIfIdle() {
+    if (worker != null && System.currentTimeMillis() - lastUse > IDLE_MILLIS) {
+      stopWorker();
+    }
+  }
+
+  private synchronized void stopWorker() {
+    if (worker != null) {
       try {
-        if (!process.waitFor(timeoutSeconds(args.get("PROSCAN_MODE")), TimeUnit.SECONDS)) {
-          process.destroyForcibly();
-          throw new UnavailableException(
-              ProScanMessages.format("error.timeout", args.get("PROSCAN_DB")));
-        }
-      } catch (InterruptedException e) {
-        process.destroyForcibly();
-        Thread.currentThread().interrupt();
-        throw new IOException(e);
-      }
-      List<String> lines;
-      try (InputStream in = Files.newInputStream(output)) {
-        lines = readLines(in);
-      }
-      List<List<String>> rows;
-      try {
-        rows = ProScanDatabase.parse(lines);
-      } catch (BusyException e) {
-        throw e;
+        // Closing its input ends the worker loop; a stuck worker is killed
+        toWorker.close();
       } catch (IOException e) {
-        // Jet writes a lock file next to the database: a read-only folder refuses any change
-        if (write && db.getParent() != null && !Files.isWritable(db.getParent())) {
-          throw new IOException(ProScanMessages.format("error.readonly", db.getParent()), e);
-        }
-        throw e;
+        // Already gone
       }
-      if (process.exitValue() != 0) {
-        // PowerShell failed before the script could report it, e.g. blocked by a policy
-        throw new IOException(String.join(" ", lines).strip());
-      }
-      return rows;
-    } finally {
-      Files.deleteIfExists(output);
+      worker.destroyForcibly();
+      worker = null;
     }
   }
 
@@ -159,20 +264,7 @@ final class JetRunner implements ProScanDatabase.Runner {
     }
   }
 
-  private static List<String> readLines(InputStream in) throws IOException {
-    List<String> lines = new ArrayList<>();
-    // The script writes ASCII; messages of PowerShell itself come in the console code page
-    try (BufferedReader reader =
-        new BufferedReader(new InputStreamReader(in, Charset.defaultCharset()))) {
-      String line;
-      while ((line = reader.readLine()) != null) {
-        lines.add(line);
-      }
-    }
-    return lines;
-  }
-
-  private synchronized Path script() throws IOException {
+  private Path script() throws IOException {
     if (script == null || !Files.isRegularFile(script)) {
       Path file = Files.createTempFile(AppProperties.FILE_CACHE_DIR, "proscan-", ".ps1"); // NON-NLS
       try (InputStream in = JetRunner.class.getResourceAsStream(SCRIPT)) {

@@ -21,7 +21,6 @@ import java.nio.file.Path;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.ExecutorService;
@@ -59,8 +58,8 @@ import org.weasis.dicom.explorer.LocalPersistence;
 import org.weasis.dicom.explorer.proscan.ProScanDatabase.Catalog;
 import org.weasis.dicom.explorer.proscan.ProScanDatabase.ConflictException;
 import org.weasis.dicom.explorer.proscan.ProScanDatabase.Entry;
+import org.weasis.dicom.explorer.proscan.ProScanDatabase.Template;
 import org.weasis.dicom.explorer.proscan.ProScanDatabase.Visit;
-import org.weasis.dicom.explorer.proscan.ProScanForms.Form;
 
 /**
  * Report of the ProScan image shown in the viewer: the description, the doctor and the conclusion
@@ -142,7 +141,7 @@ public class ProScanReportPanel extends JPanel {
           FlatClientProperties.BUTTON_TYPE, FlatClientProperties.BUTTON_TYPE_BORDERLESS);
     }
     forms.setToolTipText(ProScanMessages.getString("forms.tip"));
-    forms.addActionListener(_ -> showForms());
+    forms.addActionListener(_ -> showTemplates());
     print.setToolTipText(ProScanMessages.getString("print.tip"));
     print.addActionListener(_ -> printReport());
     add(forms, "newline, span, split 2"); // NON-NLS
@@ -486,51 +485,33 @@ public class ProScanReportPanel extends JPanel {
     return combo.getSelectedItem() instanceof Entry entry ? entry.id() : 0;
   }
 
-  private void showForms() {
+  /** The description templates of ProScan, inserted where the cursor is. */
+  private void showTemplates() {
     JPopupMenu menu = new JPopupMenu();
-    for (Form form : ProScanForms.load()) {
-      JMenuItem item = new JMenuItem(form.name());
-      // A form fills the description only when it can be saved
+    List<Template> templates = catalog == null ? List.of() : catalog.templates();
+    for (Template template : templates) {
+      JMenuItem item = new JMenuItem(template.title());
+      item.setToolTipText(template.text());
+      // A template fills the description only when it can be saved
       item.setEnabled(text.isEditable());
-      item.addActionListener(_ -> applyForm(form));
+      item.addActionListener(_ -> insertTemplate(template));
       menu.add(item);
     }
-    if (menu.getComponentCount() > 0) {
-      menu.addSeparator();
+    if (templates.isEmpty()) {
+      JMenuItem none = new JMenuItem(ProScanMessages.getString("templates.none"));
+      none.setEnabled(false);
+      menu.add(none);
     }
-    JMenuItem edit = new JMenuItem(ProScanMessages.getString("forms.edit"));
-    edit.addActionListener(_ -> ProScanFormEditor.open(this, conclusionNames()));
-    menu.add(edit);
     menu.show(forms, 0, forms.getHeight());
   }
 
-  private List<String> conclusionNames() {
-    List<String> names = new ArrayList<>();
-    for (int i = 0; i < diagnosis.getItemCount(); i++) {
-      Entry entry = diagnosis.getItemAt(i);
-      if (entry != NONE && !names.contains(entry.name())) {
-        names.add(entry.name());
-      }
-    }
-    return names;
-  }
-
-  private void applyForm(Form form) {
-    String current = text.getText().strip();
-    ProScanFormFill.fill(this, form, !current.isEmpty())
-        .ifPresent(
-            result -> {
-              text.setText(
-                  result.replace() || current.isEmpty()
-                      ? result.text()
-                      : current + " " + result.text());
-              List<Entry> entries = new ArrayList<>();
-              for (int i = 0; i < diagnosis.getItemCount(); i++) {
-                entries.add(diagnosis.getItemAt(i));
-              }
-              ProScanForms.matchConclusion(form, entries).ifPresent(diagnosis::setSelectedItem);
-              text.requestFocusInWindow();
-            });
+  private void insertTemplate(Template template) {
+    int at = text.getSelectionStart();
+    String before = text.getText().substring(0, at);
+    boolean space =
+        !before.isEmpty() && !Character.isWhitespace(before.charAt(before.length() - 1));
+    text.replaceSelection((space ? " " : "") + template.text());
+    text.requestFocusInWindow();
   }
 
   private void printReport() {

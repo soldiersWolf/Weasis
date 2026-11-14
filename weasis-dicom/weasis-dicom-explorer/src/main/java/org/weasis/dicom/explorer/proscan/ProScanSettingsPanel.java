@@ -14,7 +14,6 @@ import java.awt.Color;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.time.LocalDate;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import javax.swing.BorderFactory;
@@ -71,11 +70,8 @@ public class ProScanSettingsPanel extends JPanel {
     JButton export = new JButton(ProScanMessages.getString("export.open"));
     export.addActionListener(
         _ -> ProScanExportDialog.open(this, LocalDate.now().minusDays(6), LocalDate.now()));
-    JButton forms = new JButton(ProScanMessages.getString("forms.edit"));
-    forms.addActionListener(_ -> openForms());
     add(browse, "skip, wmin 0"); // NON-NLS
     add(export, "skip, wmin 0"); // NON-NLS
-    add(forms, "skip, wmin 0"); // NON-NLS
 
     JTextField facility =
         new JTextField(LocalPersistence.getProperties().getProperty(ProScanPrint.P_FACILITY, ""));
@@ -151,29 +147,6 @@ public class ProScanSettingsPanel extends JPanel {
             ? UIManager.getColor("Component.error.focusedBorderColor")
             : UIManager.getColor("Label.disabledForeground");
     checkResult.setForeground(color != null ? color : error ? Color.RED : Color.GRAY);
-  }
-
-  /** Opens the form constructor with the conclusions of ProScan, read in the background. */
-  private void openForms() {
-    ProScanReportPanel.EXECUTOR.execute(
-        () -> {
-          List<String> conclusions = new ArrayList<>();
-          if (ProScanDatabase.isSupported()) {
-            try {
-              Optional<Path> db =
-                  ProScanDatabase.browsableDatabase(FolderWatcher.getWatchedFolders());
-              if (db.isPresent()) {
-                ProScanReportPanel.DATABASE.catalog(db.get()).diagnoses().stream()
-                    .map(ProScanDatabase.Entry::name)
-                    .distinct()
-                    .forEach(conclusions::add);
-              }
-            } catch (IOException e) {
-              // The forms can still be made, with conclusions typed by hand
-            }
-          }
-          GuiExecutor.execute(() -> ProScanFormEditor.open(this, conclusions));
-        });
   }
 
   private void chooseDatabase() {

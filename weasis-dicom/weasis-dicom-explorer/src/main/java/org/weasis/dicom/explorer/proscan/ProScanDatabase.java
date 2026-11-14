@@ -58,8 +58,21 @@ public final class ProScanDatabase {
     }
   }
 
-  /** The doctors and diagnoses that a description refers to. */
-  public record Catalog(List<Entry> doctors, List<Entry> diagnoses) {}
+  /** A description template of ProScan: its title and its text. */
+  public record Template(String title, String text) {
+    @Override
+    public String toString() {
+      return title;
+    }
+  }
+
+  /** The doctors and diagnoses that a description refers to, and the templates of ProScan. */
+  public record Catalog(List<Entry> doctors, List<Entry> diagnoses, List<Template> templates) {}
+
+  // Dictionaries and templates are edited in ProScan too: read again after a while
+  private static final long CATALOG_MILLIS = 5 * 60_000L;
+
+  private record CachedCatalog(Catalog catalog, long readAt) {}
 
   /**
    * The record of an image, as read from the database or from an archive copy of it. The stored
@@ -130,7 +143,7 @@ public final class ProScanDatabase {
   }
 
   private final Runner runner;
-  private final Map<Path, Catalog> catalogs = new ConcurrentHashMap<>();
+  private final Map<Path, CachedCatalog> catalogs = new ConcurrentHashMap<>();
 
   public ProScanDatabase() {
     this(new JetRunner());
@@ -385,16 +398,25 @@ public final class ProScanDatabase {
     return Optional.empty();
   }
 
-  /** The doctors and diagnoses of a database, read once per session. */
+  /** The doctors, diagnoses and templates of a database, read again every few minutes. */
   public Catalog catalog(Path db) throws IOException {
-    Catalog cached = catalogs.get(db);
-    if (cached != null) {
-      return cached;
+    CachedCatalog cached = catalogs.get(db);
+    if (cached != null && System.currentTimeMillis() - cached.readAt() < CATALOG_MILLIS) {
+      return cached.catalog();
     }
     List<Entry> doctors = new ArrayList<>();
     List<Entry> diagnoses = new ArrayList<>();
+    List<Template> templates = new ArrayList<>();
     for (List<String> line : run(args("catalog", db, null))) { // NON-NLS
       if (line.size() < 3) {
+        continue;
+      }
+      if ("T".equals(line.getFirst())) {
+        String title = Objects.toString(line.get(1), "").strip();
+        String text = toShown(line.get(2));
+        if (!text.isEmpty()) {
+          templates.add(new Template(title.isEmpty() ? text : title, text));
+        }
         continue;
       }
       Entry entry = new Entry(toInt(line.get(1)), Objects.toString(line.get(2), "").strip());
@@ -409,8 +431,9 @@ public final class ProScanDatabase {
         }
       }
     }
-    Catalog catalog = new Catalog(List.copyOf(doctors), List.copyOf(diagnoses));
-    catalogs.put(db, catalog);
+    Catalog catalog =
+        new Catalog(List.copyOf(doctors), List.copyOf(diagnoses), List.copyOf(templates));
+    catalogs.put(db, new CachedCatalog(catalog, System.currentTimeMillis()));
     return catalog;
   }
 

@@ -248,7 +248,9 @@ class ProScanDatabaseTest {
             List.of(
                 List.of("D", "4", "Лікар Тестовий"),
                 List.of("G", "5", "Без патологічних змін."),
-                List.of("G", "60", "   ")));
+                List.of("G", "60", "   "),
+                List.of("T", "Норма", " Легені без свіжих змін"),
+                List.of("T", "-", "   ")));
     ProScanDatabase database = new ProScanDatabase(runner);
     Path db = root.resolve("patients2.mdb");
 
@@ -258,6 +260,9 @@ class ProScanDatabaseTest {
     assertEquals(List.of(new ProScanDatabase.Entry(4, "Лікар Тестовий")), catalog.doctors());
     assertEquals(
         List.of(new ProScanDatabase.Entry(5, "Без патологічних змін.")), catalog.diagnoses());
+    assertEquals(
+        List.of(new ProScanDatabase.Template("Норма", "Легені без свіжих змін")),
+        catalog.templates());
     assertEquals(1, runner.requests.size());
   }
 
