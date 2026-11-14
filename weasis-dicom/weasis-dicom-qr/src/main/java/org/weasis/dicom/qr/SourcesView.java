@@ -10,8 +10,6 @@
 package org.weasis.dicom.qr;
 
 import java.awt.Color;
-import java.awt.Dimension;
-import java.awt.Rectangle;
 import java.io.File;
 import java.nio.file.Path;
 import java.time.ZoneId;
@@ -29,9 +27,7 @@ import javax.swing.JRadioButton;
 import javax.swing.JScrollPane;
 import javax.swing.JSpinner;
 import javax.swing.JTextArea;
-import javax.swing.Scrollable;
 import javax.swing.SpinnerNumberModel;
-import javax.swing.SwingConstants;
 import javax.swing.UIManager;
 import net.miginfocom.swing.MigLayout;
 import org.weasis.core.api.gui.util.AbstractItemDialogPage;
@@ -44,7 +40,7 @@ import org.weasis.dicom.explorer.pref.node.AbstractDicomNode;
  * First page of the preferences, in plain words: how the patient list looks, the watched folders
  * and the archives whose studies of the day are pulled in the background.
  */
-public class SourcesView extends AbstractItemDialogPage implements Scrollable {
+public class SourcesView extends AbstractItemDialogPage {
 
   private final DefaultListModel<Path> folders = new DefaultListModel<>();
   private final JList<Path> folderList = new JList<>(folders);
@@ -213,31 +209,6 @@ public class SourcesView extends AbstractItemDialogPage implements Scrollable {
     return area;
   }
 
-  // The page follows the width of the preferences window and only scrolls vertically
-  @Override
-  public Dimension getPreferredScrollableViewportSize() {
-    return getPreferredSize();
-  }
-
-  @Override
-  public int getScrollableUnitIncrement(Rectangle visibleRect, int orientation, int direction) {
-    return 16;
-  }
-
-  @Override
-  public int getScrollableBlockIncrement(Rectangle visibleRect, int orientation, int direction) {
-    return orientation == SwingConstants.VERTICAL ? visibleRect.height : visibleRect.width;
-  }
-
-  @Override
-  public boolean getScrollableTracksViewportWidth() {
-    return true;
-  }
-
-  @Override
-  public boolean getScrollableTracksViewportHeight() {
-    return false;
-  }
 
   @Override
   public void closeAdditionalWindow() {

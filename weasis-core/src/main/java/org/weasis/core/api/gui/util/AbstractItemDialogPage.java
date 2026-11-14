@@ -9,6 +9,8 @@
  */
 package org.weasis.core.api.gui.util;
 
+import java.awt.Dimension;
+import java.awt.Rectangle;
 import java.awt.event.ActionListener;
 import java.util.ArrayList;
 import java.util.List;
@@ -17,9 +19,13 @@ import javax.swing.BoxLayout;
 import javax.swing.JButton;
 import javax.swing.JComponent;
 import javax.swing.JPanel;
+import javax.swing.JViewport;
+import javax.swing.Scrollable;
+import javax.swing.SwingConstants;
 import org.weasis.core.api.gui.Insertable;
 
-public abstract class AbstractItemDialogPage extends JPanel implements PageItem, Insertable {
+public abstract class AbstractItemDialogPage extends JPanel
+    implements PageItem, Insertable, Scrollable {
 
   /**
    * Page property saying what its settings belong to: {@link #SCOPE_USER} (they follow the user
@@ -155,5 +161,36 @@ public abstract class AbstractItemDialogPage extends JPanel implements PageItem,
 
   public JComponent getMenuPanel() {
     return null;
+  }
+
+  /*
+   * A page follows the width and height of its window while its content fits, so that nothing is
+   * cut, and scrolls only when the window is smaller than the page needs.
+   */
+  @Override
+  public Dimension getPreferredScrollableViewportSize() {
+    return getPreferredSize();
+  }
+
+  @Override
+  public int getScrollableUnitIncrement(Rectangle visibleRect, int orientation, int direction) {
+    return 16;
+  }
+
+  @Override
+  public int getScrollableBlockIncrement(Rectangle visibleRect, int orientation, int direction) {
+    return orientation == SwingConstants.VERTICAL ? visibleRect.height : visibleRect.width;
+  }
+
+  @Override
+  public boolean getScrollableTracksViewportWidth() {
+    return getParent() instanceof JViewport viewport
+        && viewport.getWidth() >= getMinimumSize().width;
+  }
+
+  @Override
+  public boolean getScrollableTracksViewportHeight() {
+    return getParent() instanceof JViewport viewport
+        && viewport.getHeight() >= getPreferredSize().height;
   }
 }

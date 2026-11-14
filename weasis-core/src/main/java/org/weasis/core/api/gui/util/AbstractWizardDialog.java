@@ -12,6 +12,10 @@ package org.weasis.core.api.gui.util;
 import java.awt.BorderLayout;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
+import java.awt.GraphicsConfiguration;
+import java.awt.Insets;
+import java.awt.Rectangle;
+import java.awt.Toolkit;
 import java.awt.Window;
 import java.awt.event.WindowEvent;
 import java.util.ArrayList;
@@ -80,6 +84,29 @@ public abstract class AbstractWizardDialog extends JDialog {
     jScrollPane1.setViewportView(tree);
 
     this.getContentPane().add(jPanelRootPanel, null);
+  }
+
+  @Override
+  public void pack() {
+    super.pack();
+    fitToScreen();
+  }
+
+  /** Keeps the dialog within the usable area of its screen, so that its buttons stay visible. */
+  protected void fitToScreen() {
+    GraphicsConfiguration gc = getGraphicsConfiguration();
+    if (gc == null) {
+      return;
+    }
+    Rectangle screen = gc.getBounds();
+    Insets insets = Toolkit.getDefaultToolkit().getScreenInsets(gc);
+    int width = screen.width - insets.left - insets.right - 16;
+    int height = screen.height - insets.top - insets.bottom - 16;
+    Dimension size = getSize();
+    if (size.width > width || size.height > height) {
+      setSize(Math.min(size.width, width), Math.min(size.height, height));
+      setLocationRelativeTo(getOwner());
+    }
   }
 
   // Overridden so we can exit when window is closed

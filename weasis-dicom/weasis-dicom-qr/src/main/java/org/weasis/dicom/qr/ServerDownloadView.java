@@ -12,8 +12,6 @@ package org.weasis.dicom.qr;
 import com.formdev.flatlaf.FlatClientProperties;
 import java.awt.Color;
 import java.awt.Component;
-import java.awt.Dimension;
-import java.awt.Rectangle;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.time.LocalDate;
@@ -54,7 +52,6 @@ import javax.swing.JTextField;
 import javax.swing.JToggleButton;
 import javax.swing.ListSelectionModel;
 import javax.swing.RowFilter;
-import javax.swing.Scrollable;
 import javax.swing.SwingUtilities;
 import javax.swing.UIManager;
 import javax.swing.event.DocumentEvent;
@@ -100,7 +97,7 @@ import org.weasis.dicom.tool.DicomListener;
  * default. Each study is retrieved from the archive that returned it.
  */
 public class ServerDownloadView extends AbstractItemDialogPage
-    implements ImportDicom, Scrollable {
+    implements ImportDicom {
   private static final Logger LOGGER = LoggerFactory.getLogger(ServerDownloadView.class);
 
   private static final String P_ARCHIVES = "download.archives"; // NON-NLS
@@ -164,31 +161,6 @@ public class ServerDownloadView extends AbstractItemDialogPage
   }
 
   // The import dialog shows its pages in a scroll pane: fill it instead of keeping the
-  // preferred size, so that the result table grows with the dialog
-  @Override
-  public Dimension getPreferredScrollableViewportSize() {
-    return getPreferredSize();
-  }
-
-  @Override
-  public int getScrollableUnitIncrement(Rectangle visible, int orientation, int direction) {
-    return 16;
-  }
-
-  @Override
-  public int getScrollableBlockIncrement(Rectangle visible, int orientation, int direction) {
-    return visible.height;
-  }
-
-  @Override
-  public boolean getScrollableTracksViewportWidth() {
-    return true;
-  }
-
-  @Override
-  public boolean getScrollableTracksViewportHeight() {
-    return true;
-  }
 
   // ---------------------------------------------------------------- search box
 
