@@ -61,7 +61,10 @@ public final class ProScanDatabase {
   /** The doctors and diagnoses that a description refers to. */
   public record Catalog(List<Entry> doctors, List<Entry> diagnoses) {}
 
-  /** The record of an image, as read from the database or from an archive copy of it. */
+  /**
+   * The record of an image, as read from the database or from an archive copy of it. The stored
+   * text is the description exactly as read, to tell whether someone changed it before saving.
+   */
   public record Visit(
       Path database,
       int recordId,
@@ -69,7 +72,27 @@ public final class ProScanDatabase {
       String text,
       int doctorId,
       int diagnosisId,
-      boolean archiveCopy) {}
+      boolean archiveCopy,
+      String storedText) {}
+
+  /**
+   * The record was changed since it was read, in ProScan or on another computer: nothing was
+   * saved. Holds what the record contains now.
+   */
+  public static final class ConflictException extends IOException {
+    private final transient Visit current;
+
+    ConflictException(Visit current) {
+      super(ProScanMessages.getString("conflict.title"));
+      this.current = current;
+    }
+
+    public Visit current() {
+      return current;
+    }
+  }
+
+  private static final int ATTEMPTS = 3;
 
   /** A line of the database browser: an image with its patient and its report. */
   public record Row(
@@ -219,7 +242,7 @@ public final class ProScanDatabase {
       args.put("PROSCAN_NAME", lastName.strip()); // NON-NLS
     }
     List<Row> rows = new ArrayList<>();
-    for (List<String> line : runner.run(args)) {
+    for (List<String> line : run(args)) {
       if (line.size() < 12 || !"B".equals(line.getFirst())) {
         continue;
       }
@@ -327,7 +350,7 @@ public final class ProScanDatabase {
 
   private Optional<Visit> readRecord(Path db, String fileName, boolean archiveCopy)
       throws IOException {
-    for (List<String> line : runner.run(args("read", db, fileName))) { // NON-NLS
+    for (List<String> line : run(args("read", db, fileName))) { // NON-NLS
       if (line.size() >= 5 && "R".equals(line.getFirst())) {
         return Optional.of(
             new Visit(
@@ -337,7 +360,8 @@ public final class ProScanDatabase {
                 toShown(line.get(2)),
                 toInt(line.get(3)),
                 toInt(line.get(4)),
-                archiveCopy));
+                archiveCopy,
+                Objects.toString(line.get(2), "")));
       }
     }
     return Optional.empty();
@@ -351,7 +375,7 @@ public final class ProScanDatabase {
     }
     List<Entry> doctors = new ArrayList<>();
     List<Entry> diagnoses = new ArrayList<>();
-    for (List<String> line : runner.run(args("catalog", db, null))) { // NON-NLS
+    for (List<String> line : run(args("catalog", db, null))) { // NON-NLS
       if (line.size() < 3) {
         continue;
       }
@@ -373,21 +397,84 @@ public final class ProScanDatabase {
   }
 
   /** Saves the description, the doctor and the diagnosis of the record. */
-  public void write(Visit visit, String text, int doctorId, int diagnosisId) throws IOException {
+  public Visit write(Visit visit, String text, int doctorId, int diagnosisId) throws IOException {
+    return write(visit, text, doctorId, diagnosisId, false);
+  }
+
+  /**
+   * Saves the report when the record still holds what was read, or whatever it holds when {@code
+   * replace} is set.
+   *
+   * @return the record as saved, to compare with at the next save
+   * @throws ConflictException when the record was changed meanwhile; nothing was saved
+   */
+  public Visit write(Visit visit, String text, int doctorId, int diagnosisId, boolean replace)
+      throws IOException {
     if (visit.archiveCopy()) {
       throw new IOException(ProScanMessages.getString("status.archive"));
     }
+    String stored = toStored(text);
     Map<String, String> args = args("write", visit.database(), visit.fileName()); // NON-NLS
     args.put("PROSCAN_ID", String.valueOf(visit.recordId())); // NON-NLS
-    args.put("PROSCAN_TEXT", toStored(text)); // NON-NLS
+    args.put("PROSCAN_TEXT", stored); // NON-NLS
     args.put("PROSCAN_DOCTOR", String.valueOf(doctorId)); // NON-NLS
     args.put("PROSCAN_DIAGNOSIS", String.valueOf(diagnosisId)); // NON-NLS
-    for (List<String> line : runner.run(args)) {
-      if (line.size() >= 2 && "N".equals(line.getFirst()) && toInt(line.get(1)) == 1) {
-        return;
+    args.put("PROSCAN_OLD_TEXT", visit.storedText()); // NON-NLS
+    args.put("PROSCAN_OLD_DOCTOR", String.valueOf(visit.doctorId())); // NON-NLS
+    args.put("PROSCAN_OLD_DIAGNOSIS", String.valueOf(visit.diagnosisId())); // NON-NLS
+    args.put("PROSCAN_FORCE", replace ? "1" : "0"); // NON-NLS
+    for (List<String> line : run(args)) {
+      String tag = line.getFirst();
+      if (line.size() >= 4 && "C".equals(tag)) {
+        String now = Objects.toString(line.get(1), "");
+        throw new ConflictException(
+            new Visit(
+                visit.database(),
+                visit.recordId(),
+                visit.fileName(),
+                toShown(now),
+                toInt(line.get(2)),
+                toInt(line.get(3)),
+                false,
+                now));
+      }
+      if (line.size() >= 2 && "N".equals(tag) && toInt(line.get(1)) == 1) {
+        return new Visit(
+            visit.database(),
+            visit.recordId(),
+            visit.fileName(),
+            toShown(stored),
+            doctorId,
+            diagnosisId,
+            false,
+            stored);
       }
     }
     throw new IOException(ProScanMessages.getString("error.gone"));
+  }
+
+  /**
+   * Runs a request, again a little later when it fails: ProScan and other computers use the
+   * database at the same time, and Jet refuses a record or page while another program writes it.
+   */
+  private List<List<String>> run(Map<String, String> args) throws IOException {
+    IOException last = null;
+    for (int attempt = 1; attempt <= ATTEMPTS; attempt++) {
+      try {
+        return runner.run(args);
+      } catch (IOException e) {
+        last = e;
+        if (attempt < ATTEMPTS) {
+          try {
+            Thread.sleep(700L * attempt);
+          } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            throw e;
+          }
+        }
+      }
+    }
+    throw last;
   }
 
   private static Map<String, String> args(String mode, Path db, String fileName) {

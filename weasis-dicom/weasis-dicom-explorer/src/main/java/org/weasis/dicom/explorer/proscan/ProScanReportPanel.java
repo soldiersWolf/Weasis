@@ -15,6 +15,7 @@ import java.awt.Font;
 import java.awt.event.ActionEvent;
 import java.awt.event.InputEvent;
 import java.awt.event.KeyEvent;
+import java.io.IOException;
 import java.net.URI;
 import java.nio.file.Path;
 import java.time.LocalDate;
@@ -39,6 +40,7 @@ import javax.swing.JPopupMenu;
 import javax.swing.JScrollPane;
 import javax.swing.JTextArea;
 import javax.swing.KeyStroke;
+import javax.swing.Timer;
 import javax.swing.UIManager;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
@@ -55,6 +57,7 @@ import org.weasis.dicom.codec.DicomSeries;
 import org.weasis.dicom.codec.TagD;
 import org.weasis.dicom.explorer.LocalPersistence;
 import org.weasis.dicom.explorer.proscan.ProScanDatabase.Catalog;
+import org.weasis.dicom.explorer.proscan.ProScanDatabase.ConflictException;
 import org.weasis.dicom.explorer.proscan.ProScanDatabase.Entry;
 import org.weasis.dicom.explorer.proscan.ProScanDatabase.Visit;
 import org.weasis.dicom.explorer.proscan.ProScanForms.Form;
@@ -90,6 +93,7 @@ public class ProScanReportPanel extends JPanel {
   public record Patient(String name, LocalDate birth, LocalDate date, LocalTime time) {}
 
   private Visit visit;
+  private Catalog catalog;
   private Patient patient;
   private String patientName;
   private boolean dirty;
@@ -158,6 +162,9 @@ public class ProScanReportPanel extends JPanel {
     bind(KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, InputEvent.CTRL_DOWN_MASK), true);
     setEditable(false);
     setVisible(false);
+    // Reports also change in ProScan and on other computers: look again now and then
+    Timer refresh = new Timer(30_000, _ -> refreshQuietly());
+    refresh.start();
   }
 
   private void bind(KeyStroke key, boolean next) {
@@ -274,6 +281,7 @@ public class ProScanReportPanel extends JPanel {
           () -> {
             if (current == generation) {
               visit = found.get();
+              this.catalog = catalog;
               fill(found.get(), catalog);
               boolean copy = found.get().archiveCopy();
               setEditable(!copy);
@@ -301,6 +309,14 @@ public class ProScanReportPanel extends JPanel {
   }
 
   private void submitSave(boolean next) {
+    submitSave(next, false);
+  }
+
+  /**
+   * Saves in the background. The record may have been changed in ProScan or on another computer
+   * since it was read: then nothing is saved and the user chooses whose report to keep.
+   */
+  private void submitSave(boolean next, boolean replace) {
     Visit target = visit;
     String value = text.getText();
     int doctorId = idOf(doctor);
@@ -311,12 +327,13 @@ public class ProScanReportPanel extends JPanel {
     EXECUTOR.execute(
         () -> {
           try {
-            DATABASE.write(target, value, doctorId, diagnosisId);
+            Visit saved = DATABASE.write(target, value, doctorId, diagnosisId, replace);
             String time =
                 LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm")); // NON-NLS
             GuiExecutor.execute(
                 () -> {
                   if (current == generation) {
+                    visit = saved;
                     dirty = false;
                     setEditable(true);
                     setStatus(ProScanMessages.format("status.saved", time), false);
@@ -325,6 +342,9 @@ public class ProScanReportPanel extends JPanel {
                     }
                   }
                 });
+          } catch (ConflictException e) {
+            GuiExecutor.execute(
+                () -> resolveConflict(e.current(), value, doctorId, diagnosisId, next, current));
           } catch (Exception e) {
             LOGGER.error("Saving the ProScan report of {}", target.fileName(), e);
             GuiExecutor.execute(
@@ -342,6 +362,95 @@ public class ProScanReportPanel extends JPanel {
                 });
           }
         });
+  }
+
+  /** Asks whose report to keep when the record changed since it was read. */
+  private void resolveConflict(
+      Visit now, String mine, int doctorId, int diagnosisId, boolean next, int current) {
+    JTextArea theirs = new JTextArea(now.text(), 5, 40);
+    theirs.setEditable(false);
+    theirs.setLineWrap(true);
+    theirs.setWrapStyleWord(true);
+    JPanel message = new JPanel(new MigLayout("ins 0, wrap 1", "[grow,fill]")); // NON-NLS
+    message.add(new JLabel(ProScanMessages.format("conflict.message", patientName)));
+    message.add(new JScrollPane(theirs), "grow"); // NON-NLS
+    String[] options = {
+      ProScanMessages.getString("conflict.mine"),
+      ProScanMessages.getString("conflict.theirs"),
+      ProScanMessages.getString("export.close")
+    };
+    int choice =
+        JOptionPane.showOptionDialog(
+            this,
+            message,
+            ProScanMessages.getString("conflict.title"),
+            JOptionPane.DEFAULT_OPTION,
+            JOptionPane.WARNING_MESSAGE,
+            null,
+            options,
+            options[1]);
+    boolean shown = current == generation;
+    if (choice == 0) {
+      // Mine replaces theirs, compared from now on with what the record holds
+      if (shown) {
+        visit = now;
+        submitSave(next, true);
+      } else {
+        EXECUTOR.execute(() -> replaceInBackground(now, mine, doctorId, diagnosisId));
+      }
+    } else if (shown) {
+      if (choice == 1) {
+        visit = now;
+        fill(now, catalog);
+      }
+      setEditable(true);
+      setStatus(ProScanMessages.getString("conflict.kept"), choice != 1);
+    }
+  }
+
+  private void replaceInBackground(Visit now, String mine, int doctorId, int diagnosisId) {
+    try {
+      DATABASE.write(now, mine, doctorId, diagnosisId, true);
+    } catch (IOException e) {
+      LOGGER.error("Saving the ProScan report of {}", now.fileName(), e);
+    }
+  }
+
+  /** Shows the changes made in ProScan or on another computer while the report is untouched. */
+  private void refreshQuietly() {
+    if (!isShowing() || visit == null || dirty || !text.isEditable() || image == null) {
+      return;
+    }
+    int current = generation;
+    Path file = image;
+    Visit before = visit;
+    EXECUTOR.execute(
+        () -> {
+          try {
+            Optional<Visit> now = DATABASE.read(file);
+            if (now.isEmpty() || sameContent(before, now.get())) {
+              return;
+            }
+            String time =
+                LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm")); // NON-NLS
+            GuiExecutor.execute(
+                () -> {
+                  if (current == generation && !dirty && visit == before) {
+                    visit = now.get();
+                    fill(now.get(), catalog);
+                    setStatus(ProScanMessages.format("status.refreshed", time), false);
+                  }
+                });
+          } catch (IOException e) {
+            LOGGER.debug("Refreshing the ProScan report of {}: {}", file, e.getMessage());
+          }
+        });
+  }
+
+  static boolean sameContent(Visit a, Visit b) {
+    return a.storedText().equals(b.storedText())
+        && a.doctorId() == b.doctorId()
+        && a.diagnosisId() == b.diagnosisId();
   }
 
   private void fill(Visit record, Catalog catalog) {

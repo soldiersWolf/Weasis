@@ -31,6 +31,16 @@ function Add-Param($command, [System.Data.OleDb.OleDbType]$type, $value) {
   $p.Value = $value
 }
 
+function As-Text($value) {
+  if ($null -eq $value -or $value -is [DBNull]) { return '' }
+  return [string]$value
+}
+
+function As-Int($value) {
+  if ($null -eq $value -or $value -is [DBNull] -or [string]$value -eq '') { return 0 }
+  return [int]$value
+}
+
 function Write-Rows($connection, [string]$tag, [string]$sql) {
   $command = $connection.CreateCommand()
   $command.CommandText = $sql
@@ -45,7 +55,9 @@ function Write-Rows($connection, [string]$tag, [string]$sql) {
 }
 
 try {
-  $source = 'Provider=Microsoft.Jet.OLEDB.4.0;Data Source="' + (Get-Arg 'PROSCAN_DB') + '"'
+  # Shared mode: ProScan and the other computers keep working on the database meanwhile
+  $source = 'Provider=Microsoft.Jet.OLEDB.4.0;Mode=Share Deny None;Data Source="' +
+    (Get-Arg 'PROSCAN_DB') + '"'
   $connection = New-Object System.Data.OleDb.OleDbConnection -ArgumentList $source
   $connection.Open()
   try {
@@ -95,7 +107,40 @@ try {
         } finally { $reader.Close() }
       }
       'write' {
+        # The record may have been changed meanwhile, in ProScan or on another computer: it is
+        # saved only when it still holds what the user read, unless the user chose to replace it
+        $tx = $connection.BeginTransaction()
+        $check = $connection.CreateCommand()
+        $check.Transaction = $tx
+        $check.CommandText =
+          'SELECT Description, DoctorID, DiagnID FROM FluorTab WHERE ID = ? AND FileName = ?'
+        Add-Param $check Integer ([int](Get-Arg 'PROSCAN_ID'))
+        Add-Param $check VarWChar (Get-Arg 'PROSCAN_FILE')
+        $reader = $check.ExecuteReader()
+        $found = $false
+        try {
+          if ($reader.Read()) {
+            $found = $true
+            $text = As-Text $reader.GetValue(0)
+            $doctor = As-Int $reader.GetValue(1)
+            $diagnosis = As-Int $reader.GetValue(2)
+          }
+        } finally { $reader.Close() }
+        if (-not $found) {
+          $tx.Rollback()
+          Write-Line @('N', 0)
+          break
+        }
+        $same = ($text -ceq (As-Text (Get-Arg 'PROSCAN_OLD_TEXT'))) -and
+          ($doctor -eq (As-Int (Get-Arg 'PROSCAN_OLD_DOCTOR'))) -and
+          ($diagnosis -eq (As-Int (Get-Arg 'PROSCAN_OLD_DIAGNOSIS')))
+        if (-not $same -and (Get-Arg 'PROSCAN_FORCE') -ne '1') {
+          $tx.Rollback()
+          Write-Line @('C', $text, $doctor, $diagnosis)
+          break
+        }
         $command = $connection.CreateCommand()
+        $command.Transaction = $tx
         $command.CommandText = 'UPDATE FluorTab SET Description = ?, IsDescr = 1, ' +
           'DoctorID = ?, DiagnID = ? WHERE ID = ? AND FileName = ?'
         Add-Param $command LongVarWChar (Get-Arg 'PROSCAN_TEXT')
@@ -103,7 +148,9 @@ try {
         Add-Param $command Integer ([int](Get-Arg 'PROSCAN_DIAGNOSIS'))
         Add-Param $command Integer ([int](Get-Arg 'PROSCAN_ID'))
         Add-Param $command VarWChar (Get-Arg 'PROSCAN_FILE')
-        Write-Line @('N', $command.ExecuteNonQuery())
+        $count = $command.ExecuteNonQuery()
+        $tx.Commit()
+        Write-Line @('N', $count)
       }
       default { throw 'Unknown mode' }
     }

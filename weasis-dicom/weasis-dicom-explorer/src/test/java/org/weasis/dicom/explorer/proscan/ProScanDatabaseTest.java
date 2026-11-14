@@ -81,7 +81,16 @@ class ProScanDatabaseTest {
     Visit visit = new ProScanDatabase(runner).read(image, "").orElseThrow();
 
     assertEquals(
-        new Visit(db, 104044, IMAGE, "Легені без змін\nСерце в нормі", 4, 5, false), visit);
+        new Visit(
+            db,
+            104044,
+            IMAGE,
+            "Легені без змін\nСерце в нормі",
+            4,
+            5,
+            false,
+            " Легені без змін\r\nСерце в нормі"),
+        visit);
     assertEquals("read", runner.requests.getFirst().get("PROSCAN_MODE"));
     assertEquals(IMAGE, runner.requests.getFirst().get("PROSCAN_FILE"));
   }
@@ -136,9 +145,9 @@ class ProScanDatabaseTest {
   @Test
   void writesTheChosenDoctorAndDiagnosis() throws IOException {
     FakeRunner runner = new FakeRunner(List.of(List.of("N", "1")));
-    Visit visit = new Visit(root.resolve("patients2.mdb"), 7, IMAGE, "", 4, 5, false);
+    Visit visit = new Visit(root.resolve("patients2.mdb"), 7, IMAGE, "", 4, 5, false, " ");
 
-    new ProScanDatabase(runner).write(visit, "Норма", 3, 254);
+    Visit saved = new ProScanDatabase(runner).write(visit, "Норма", 3, 254);
 
     Map<String, String> request = runner.requests.getFirst();
     assertEquals("write", request.get("PROSCAN_MODE"));
@@ -146,12 +155,51 @@ class ProScanDatabaseTest {
     assertEquals(" Норма", request.get("PROSCAN_TEXT"));
     assertEquals("3", request.get("PROSCAN_DOCTOR"));
     assertEquals("254", request.get("PROSCAN_DIAGNOSIS"));
+    // What was read, so that the script saves only an unchanged record
+    assertEquals(" ", request.get("PROSCAN_OLD_TEXT"));
+    assertEquals("4", request.get("PROSCAN_OLD_DOCTOR"));
+    assertEquals("0", request.get("PROSCAN_FORCE"));
+    assertEquals(" Норма", saved.storedText());
+    assertEquals(3, saved.doctorId());
+  }
+
+  @Test
+  void saysWhatTheRecordHoldsWhenItWasChangedElsewhere() {
+    FakeRunner runner = new FakeRunner(List.of(List.of("C", " Сколіоз", "2", "60")));
+    Visit visit = new Visit(root.resolve("patients2.mdb"), 7, IMAGE, "", 4, 5, false, " ");
+
+    ProScanDatabase.ConflictException conflict =
+        assertThrows(
+            ProScanDatabase.ConflictException.class,
+            () -> new ProScanDatabase(runner).write(visit, "Норма", 3, 254));
+
+    assertEquals("Сколіоз", conflict.current().text());
+    assertEquals(" Сколіоз", conflict.current().storedText());
+    assertEquals(2, conflict.current().doctorId());
+    assertEquals(60, conflict.current().diagnosisId());
+  }
+
+  @Test
+  void triesAgainWhenTheDatabaseIsBusy() throws IOException {
+    int[] calls = {0};
+    ProScanDatabase.Runner busyOnce =
+        args -> {
+          if (calls[0]++ == 0) {
+            throw new IOException("Could not update; currently locked.");
+          }
+          return List.of(List.of("N", "1"));
+        };
+    Visit visit = new Visit(root.resolve("patients2.mdb"), 7, IMAGE, "", 4, 5, false, " ");
+
+    new ProScanDatabase(busyOnce).write(visit, "Норма", 3, 254);
+
+    assertEquals(2, calls[0]);
   }
 
   @Test
   void failsWhenNoRecordWasUpdated() {
     FakeRunner runner = new FakeRunner(List.of(List.of("N", "0")));
-    Visit visit = new Visit(root.resolve("patients2.mdb"), 7, IMAGE, "", 4, 5, false);
+    Visit visit = new Visit(root.resolve("patients2.mdb"), 7, IMAGE, "", 4, 5, false, " ");
 
     assertThrows(IOException.class, () -> new ProScanDatabase(runner).write(visit, "x", 0, 0));
   }
