@@ -26,7 +26,9 @@ import java.util.Optional;
 import java.util.function.Consumer;
 import javax.swing.JButton;
 import javax.swing.JComboBox;
+import javax.swing.JComponent;
 import javax.swing.JDialog;
+import javax.swing.JFormattedTextField;
 import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
@@ -43,6 +45,7 @@ import net.miginfocom.swing.MigLayout;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.weasis.core.api.gui.util.GuiExecutor;
+import org.weasis.core.ui.tp.raven.datetime.DatePicker;
 import org.weasis.dicom.explorer.FolderWatcher;
 import org.weasis.dicom.explorer.proscan.ProScanDatabase.Row;
 
@@ -60,7 +63,11 @@ public final class ProScanBrowser extends JDialog {
     YESTERDAY(1),
     WEEK(6),
     MONTH(30),
-    YEAR(365);
+    YEAR(365),
+    // Any day, or any days, picked in the calendars
+    DATES(-1),
+    // Every image of the database, for a search by name
+    ALL(-2);
 
     final int days;
 
@@ -82,6 +89,9 @@ public final class ProScanBrowser extends JDialog {
   private final Path database;
   private final JComboBox<Period> period = new JComboBox<>(Period.values());
   private final JTextField name = new JTextField(14);
+  private final DatePicker fromPicker = datePicker();
+  private final DatePicker toPicker = datePicker();
+  private final JLabel dash = new JLabel("—");
   private final JButton find = new JButton(ProScanMessages.getString("browse.find"));
   private final JButton export = new JButton(ProScanMessages.getString("export.open"));
   private final JButton print = new JButton(ProScanMessages.getString("print.button"));
@@ -98,7 +108,31 @@ public final class ProScanBrowser extends JDialog {
     setDefaultCloseOperation(DISPOSE_ON_CLOSE);
 
     period.setSelectedItem(Period.WEEK);
-    period.addActionListener(_ -> search());
+    fromPicker.setSelectedDate(LocalDate.now());
+    toPicker.setSelectedDate(LocalDate.now());
+    period.addActionListener(
+        _ -> {
+          boolean dates = period.getSelectedItem() == Period.DATES;
+          fromPicker.getEditor().setVisible(dates);
+          dash.setVisible(dates);
+          toPicker.getEditor().setVisible(dates);
+          revalidate();
+          search();
+        });
+    fromPicker.addDateSelectionListener(
+        _ -> {
+          // A single day by default: the end follows the start until it is changed
+          LocalDate from = fromPicker.getSelectedDate();
+          LocalDate to = toPicker.getSelectedDate();
+          if (from != null && (to == null || to.isBefore(from))) {
+            toPicker.setSelectedDate(from);
+          }
+          search();
+        });
+    toPicker.addDateSelectionListener(_ -> search());
+    for (JComponent c : List.of(fromPicker.getEditor(), dash, toPicker.getEditor())) {
+      c.setVisible(false);
+    }
     name.putClientProperty(
         FlatClientProperties.PLACEHOLDER_TEXT, ProScanMessages.getString("browse.name"));
     name.putClientProperty(FlatClientProperties.TEXT_FIELD_SHOW_CLEAR_BUTTON, true);
@@ -113,8 +147,12 @@ public final class ProScanBrowser extends JDialog {
         });
     print.setToolTipText(ProScanMessages.getString("print.selected"));
     print.addActionListener(_ -> printSelected());
-    JPanel top = new JPanel(new MigLayout("ins 8 8 4 8, fillx", "[][][][]push[][]")); // NON-NLS
+    JPanel top =
+        new JPanel(new MigLayout("ins 8 8 4 8, fillx, hidemode 3", "[][][][][][][]push[][]"));
     top.add(period);
+    top.add(fromPicker.getEditor(), "width 110lp!"); // NON-NLS
+    top.add(dash);
+    top.add(toPicker.getEditor(), "width 110lp!"); // NON-NLS
     top.add(name, "growx"); // NON-NLS
     top.add(find);
     top.add(count, "gapleft 12"); // NON-NLS
@@ -192,9 +230,27 @@ public final class ProScanBrowser extends JDialog {
     instance.search();
   }
 
+  private static DatePicker datePicker() {
+    DatePicker picker = new DatePicker();
+    picker.setStartWeekOnMonday(true);
+    picker.setCloseAfterSelected(true);
+    picker.setEditor(new JFormattedTextField());
+    return picker;
+  }
+
   /** First and last day of the chosen period. */
   private LocalDate[] periodDays() {
     Period p = (Period) period.getSelectedItem();
+    if (p == Period.DATES) {
+      LocalDate from = fromPicker.getSelectedDate();
+      LocalDate to = toPicker.getSelectedDate();
+      LocalDate start = from == null ? LocalDate.now() : from;
+      LocalDate end = to == null || to.isBefore(start) ? start : to;
+      return new LocalDate[] {start, end};
+    }
+    if (p == Period.ALL) {
+      return new LocalDate[] {LocalDate.of(1900, 1, 1), LocalDate.now()};
+    }
     LocalDate to = LocalDate.now();
     LocalDate from = to.minusDays(p == null ? 6 : p.days);
     return new LocalDate[] {from, p == Period.YESTERDAY ? from : to};
