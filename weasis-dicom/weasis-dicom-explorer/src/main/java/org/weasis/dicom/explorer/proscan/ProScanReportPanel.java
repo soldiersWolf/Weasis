@@ -30,6 +30,7 @@ import javax.swing.DefaultComboBoxModel;
 import javax.swing.JButton;
 import javax.swing.JComboBox;
 import javax.swing.JComponent;
+import javax.swing.JFileChooser;
 import javax.swing.JLabel;
 import javax.swing.JMenuItem;
 import javax.swing.JOptionPane;
@@ -41,6 +42,7 @@ import javax.swing.KeyStroke;
 import javax.swing.UIManager;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
+import javax.swing.filechooser.FileNameExtensionFilter;
 import net.miginfocom.swing.MigLayout;
 import org.dcm4che3.data.Tag;
 import org.slf4j.Logger;
@@ -51,6 +53,7 @@ import org.weasis.core.api.util.ThreadUtil;
 import org.weasis.dicom.codec.DicomImageElement;
 import org.weasis.dicom.codec.DicomSeries;
 import org.weasis.dicom.codec.TagD;
+import org.weasis.dicom.explorer.LocalPersistence;
 import org.weasis.dicom.explorer.proscan.ProScanDatabase.Catalog;
 import org.weasis.dicom.explorer.proscan.ProScanDatabase.Entry;
 import org.weasis.dicom.explorer.proscan.ProScanDatabase.Visit;
@@ -72,6 +75,9 @@ public class ProScanReportPanel extends JPanel {
 
   private final Runnable openNext;
   private final JLabel status = new JLabel();
+  private final JButton chooseDatabase =
+      new JButton(ProScanMessages.getString("settings.choose.db"));
+  private Path image;
   private final JComboBox<Entry> doctor = new JComboBox<>();
   private final JComboBox<Entry> diagnosis = new JComboBox<>();
   private final JTextArea text = new JTextArea(4, 20);
@@ -104,6 +110,13 @@ public class ProScanReportPanel extends JPanel {
     status.putClientProperty(FlatClientProperties.STYLE_CLASS, "small"); // NON-NLS
     add(title, "span, split 2"); // NON-NLS
     add(status, "growx, wmin 0"); // NON-NLS
+    // Shown when the record cannot be saved: the way to the working database, without the settings
+    chooseDatabase.putClientProperty(
+        FlatClientProperties.BUTTON_TYPE, FlatClientProperties.BUTTON_TYPE_BORDERLESS);
+    chooseDatabase.setToolTipText(ProScanMessages.getString("settings.choose.db.tip"));
+    chooseDatabase.addActionListener(_ -> chooseWorkingDatabase());
+    chooseDatabase.setVisible(false);
+    add(chooseDatabase, "newline, span, left, hidemode 3"); // NON-NLS
 
     for (JComboBox<Entry> combo : List.of(doctor, diagnosis)) {
       // A long conclusion must not widen the explorer
@@ -185,17 +198,39 @@ public class ProScanReportPanel extends JPanel {
     visit = null;
     patient = who;
     patientName = who == null ? "" : who.name();
-    int current = ++generation;
-    Optional<Path> image = proScanImage(series);
-    if (image.isEmpty() || !ProScanDatabase.isSupported()) {
+    Optional<Path> found = proScanImage(series);
+    image = found.orElse(null);
+    if (found.isEmpty() || !ProScanDatabase.isSupported()) {
+      ++generation;
       setVisible(false);
       return;
     }
+    setVisible(true);
+    reload();
+  }
+
+  private void reload() {
+    int current = ++generation;
+    Path file = image;
     fill(null, null);
     setEditable(false);
+    chooseDatabase.setVisible(false);
     setStatus(ProScanMessages.getString("status.loading"), false);
-    setVisible(true);
-    EXECUTOR.execute(() -> load(image.get(), current));
+    EXECUTOR.execute(() -> load(file, current));
+  }
+
+  /** Lets the user pick the database ProScan works with, then reads the report from it. */
+  private void chooseWorkingDatabase() {
+    JFileChooser chooser = new JFileChooser();
+    chooser.setFileFilter(new FileNameExtensionFilter("ProScan (*.mdb)", "mdb")); // NON-NLS
+    chooser.setDialogTitle(ProScanMessages.getString("settings.choose.db"));
+    if (chooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
+      LocalPersistence.getProperties()
+          .setProperty(ProScanDatabase.P_DATABASE, chooser.getSelectedFile().getPath());
+      if (image != null) {
+        reload();
+      }
+    }
   }
 
   /** The local file of a ProScan image, which ProScan names in its database. */
@@ -229,6 +264,7 @@ public class ProScanReportPanel extends JPanel {
             () -> {
               if (current == generation) {
                 setStatus(ProScanMessages.getString(key), true);
+                chooseDatabase.setVisible(true);
               }
             });
         return;
@@ -242,6 +278,7 @@ public class ProScanReportPanel extends JPanel {
               boolean copy = found.get().archiveCopy();
               setEditable(!copy);
               setStatus(ProScanMessages.getString(copy ? "status.archive" : "status.loaded"), copy);
+              chooseDatabase.setVisible(copy);
             }
           });
     } catch (Exception e) {
@@ -250,6 +287,7 @@ public class ProScanReportPanel extends JPanel {
           () -> {
             if (current == generation) {
               setStatus(ProScanMessages.format("status.error", e.getMessage()), true);
+              chooseDatabase.setVisible(true);
             }
           });
     }

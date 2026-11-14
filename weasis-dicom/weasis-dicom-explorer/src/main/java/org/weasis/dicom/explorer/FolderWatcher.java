@@ -34,6 +34,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.weasis.core.api.gui.util.GuiUtils;
 import org.weasis.dicom.explorer.HangingProtocols.OpeningViewer;
+import org.weasis.dicom.explorer.proscan.ProScanBackup;
 
 /**
  * Keeps folders in sync with the explorer: the recent files of each watched folder are loaded at
@@ -58,7 +59,7 @@ public final class FolderWatcher {
   private static final String P_ROOTS = "folder.watch.roots"; // NON-NLS
   private static final String P_LEGACY_ROOT = "folder.watch.root"; // NON-NLS
   private static final String SEPARATOR = "\u001f";
-  private static final long POLL_SECONDS = 20;
+  private static final long POLL_SECONDS = 10;
 
   private static FolderWatcher instance;
   private static final List<Runnable> CHANGE_LISTENERS = new CopyOnWriteArrayList<>();
@@ -185,6 +186,23 @@ public final class FolderWatcher {
   /** Runs the listener on the calling thread whenever the watched folders change. */
   public static void addChangeListener(Runnable listener) {
     CHANGE_LISTENERS.add(listener);
+  }
+
+  /**
+   * Whether the folder holds dated daily folders, like the archive of a fluorograph: years of
+   * images, of which only the recent days are worth loading.
+   */
+  public static boolean holdsDailyFolders(Path folder) {
+    try (DirectoryStream<Path> entries = Files.newDirectoryStream(folder, Files::isDirectory)) {
+      for (Path entry : entries) {
+        if (ProScanBackup.dayOf(entry).isPresent()) {
+          return true;
+        }
+      }
+    } catch (IOException e) {
+      LOGGER.warn("Cannot list {}: {}", folder, e.getMessage());
+    }
+    return false;
   }
 
   /** Name shown as the source of the studies loaded from the folder. */

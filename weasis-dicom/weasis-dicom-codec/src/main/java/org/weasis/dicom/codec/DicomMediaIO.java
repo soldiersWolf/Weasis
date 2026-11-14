@@ -300,6 +300,8 @@ public class DicomMediaIO implements DcmMediaReader {
 
   private final FileCache fileCache;
   private boolean proScan = false;
+  // The repaired copy of a ProScan file is written when its pixels are first read
+  private boolean proScanCopied = false;
 
   public DicomMediaIO(URI uri) {
     this.uri = Objects.requireNonNull(uri);
@@ -668,6 +670,9 @@ public class DicomMediaIO implements DcmMediaReader {
       throws Exception {
     if (isReadableDicom() && frame >= 0 && frame < numberOfFrame && hasPixel) {
       FileCache cache = media.getFileCache();
+      if (proScan && !proScanCopied) {
+        copyRepairedProScan(cache);
+      }
       Optional<Path> original = cache.getOriginalFile();
       if (original.isPresent()) {
         LOGGER.debug(
@@ -980,20 +985,34 @@ public class DicomMediaIO implements DcmMediaReader {
       if (numberOfFrame <= 0 && hasPixel) {
         this.numberOfFrame = 1;
       }
-      if (!proScan && ProScanFix.isProScan(dcm)) {
-        // Vendor workaround: read a repaired copy instead of the malformed original (see ProScanFix)
-        Optional<Path> repaired = ProScanFix.repairIfNeeded(path);
-        if (repaired.isPresent()) {
-          proScan = true;
-          fileCache.setOriginalTempFile(repaired.get());
-          return readMetaData();
-        }
+      if (!proScanCopied && ProScanFix.isProScan(dcm)) {
+        // Vendor workaround (see ProScanFix): the header of the malformed original is repaired in
+        // memory, and the file is copied and repaired only when its pixels are needed, so that
+        // listing many images on a network share stays fast
+        ProScanFix.repairHeader(dcm);
+        proScan = true;
       }
       HEADER_CACHE.put(this, dicomMetaData);
       return dicomMetaData;
     } finally {
       reader.dispose();
     }
+  }
+
+  /**
+   * Reads the pixels of a ProScan image from its repaired copy. The pixel data of the copy lies at
+   * other offsets than in the original, so the header kept for the original is dropped.
+   */
+  private synchronized void copyRepairedProScan(FileCache cache) {
+    if (proScanCopied) {
+      return;
+    }
+    Optional<Path> repaired = cache.getOriginalFile().flatMap(ProScanFix::repairIfNeeded);
+    if (repaired.isPresent()) {
+      cache.setOriginalTempFile(repaired.get());
+      HEADER_CACHE.remove(this);
+    }
+    proScanCopied = true;
   }
 
   public static boolean isHiddenModality(String modality) {

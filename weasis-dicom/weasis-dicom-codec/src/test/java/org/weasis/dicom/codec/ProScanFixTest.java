@@ -15,6 +15,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.ByteArrayOutputStream;
+import java.nio.charset.Charset;
 import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.Tag;
 import org.dcm4che3.data.VR;
@@ -65,5 +66,23 @@ class ProScanFixTest {
 
     dcm.setString(Tag.Manufacturer, VR.LO, "Other vendor");
     assertFalse(ProScanFix.isProScan(dcm));
+  }
+
+  @Test
+  void repairsTheHeaderInMemoryOnlyOnce() {
+    var dcm = new Attributes();
+    // Synthetic name stored like ProScan: windows-1251 bytes without a character set
+    byte[] name = "Тестовий^Тест".getBytes(Charset.forName("windows-1251"));
+    dcm.setBytes(Tag.PatientName, VR.PN, name);
+    dcm.setString(Tag.WindowCenter, VR.DS, "40000");
+    dcm.setString(Tag.WindowWidth, VR.DS, "20000");
+
+    ProScanFix.repairHeader(dcm);
+    ProScanFix.repairHeader(dcm);
+
+    assertEquals("ISO_IR 192", dcm.getString(Tag.SpecificCharacterSet));
+    assertEquals("Тестовий^Тест", dcm.getString(Tag.PatientName));
+    assertArrayEquals(new String[] {"16384", "40000"}, dcm.getStrings(Tag.WindowCenter));
+    assertTrue(dcm.getString(Tag.PatientID).startsWith("PS"));
   }
 }

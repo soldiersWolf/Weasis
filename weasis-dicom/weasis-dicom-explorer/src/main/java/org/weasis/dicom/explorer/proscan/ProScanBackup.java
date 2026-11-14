@@ -73,7 +73,7 @@ public final class ProScanBackup {
   }
 
   /** Date of a daily folder of ProScan, empty for any other folder. */
-  static Optional<LocalDate> dayOf(Path folder) {
+  public static Optional<LocalDate> dayOf(Path folder) {
     String name = folder.getFileName() == null ? "" : folder.getFileName().toString();
     for (DateTimeFormatter format : DAY_NAMES) {
       try {

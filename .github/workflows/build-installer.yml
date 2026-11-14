@@ -70,15 +70,19 @@ jobs:
       - name: Build with Maven
         shell: bash
         run: |
-          mvn -B clean install
-          mvn -B -P compressXZ -f weasis-distributions clean package
+          # A unique release version per build: the launcher reinstalls every SNAPSHOT bundle at each
+          # start, which makes it slow, but keeps the bundles of a release in its cache
+          CHANGELIST="-h$(date -u +%Y%m%d%H%M)"
+          echo "CHANGELIST=${CHANGELIST}" >> $GITHUB_ENV
+          mvn -B -Dchangelist="${CHANGELIST}" clean install
+          mvn -B -Dchangelist="${CHANGELIST}" -P compressXZ -f weasis-distributions clean package
           file="weasis-distributions/target/native-dist/weasis-native.zip"
           sha256sum "$file" >> "$file.sha256"
 
       - name: Retrieve version
         shell: bash
         run: |
-          FVERSION=$(awk -F'[<>]' '/<revision>/{print $3}' weasis-parent/pom.xml)$(awk -F'[<>]' '/<changelist>/{print $3}' weasis-parent/pom.xml)
+          FVERSION=$(awk -F'[<>]' '/<revision>/{print $3}' weasis-parent/pom.xml)${CHANGELIST}
           echo "WEASIS_VERSION=${FVERSION}" >> $GITHUB_ENV
 
       - name: Set compatible version

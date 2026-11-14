@@ -16,6 +16,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.HexFormat;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import org.dcm4che3.data.Attributes;
@@ -106,6 +107,19 @@ public final class ProScanFix {
     }
   }
 
+  /**
+   * Repairs in memory the header of an original ProScan file: text encoding and display
+   * attributes, as in the repaired copy. Lets the images be listed without copying them.
+   */
+  public static void repairHeader(Attributes dataset) {
+    try {
+      transcodeText(dataset);
+    } catch (IOException e) {
+      LOGGER.error("Cannot transcode the ProScan text", e);
+    }
+    repairTags(dataset);
+  }
+
   private static void repairCodestream(Attributes dataset) {
     if (dataset.getValue(Tag.PixelData) instanceof Fragments fragments) {
       for (int i = 1; i < fragments.size(); i++) {
@@ -184,7 +198,9 @@ public final class ProScanFix {
     String[] centers = dataset.getStrings(Tag.WindowCenter);
     String[] widths = dataset.getStrings(Tag.WindowWidth);
     // Full range of the shifted 15-bit values first, like the default view of the vendor viewer
-    if (centers != null && widths != null && centers.length > 0 && widths.length > 0) {
+    String[] explanations = dataset.getStrings(Tag.WindowCenterWidthExplanation);
+    boolean done = explanations != null && List.of(explanations).contains("PROSCAN"); // NON-NLS
+    if (!done && centers != null && widths != null && centers.length > 0 && widths.length > 0) {
       dataset.setString(Tag.WindowCenter, VR.DS, "16384", centers[0]);
       dataset.setString(Tag.WindowWidth, VR.DS, "32768", widths[0]);
       dataset.setString(Tag.WindowCenterWidthExplanation, VR.LO, "FULL", "PROSCAN"); // NON-NLS

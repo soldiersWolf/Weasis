@@ -86,6 +86,8 @@ public class LoadLocalDicom extends LoadDicom {
 
   private final File[] files;
   private final boolean recursive;
+  // Set for a folder of daily folders, whose recent days the folder watcher loads instead
+  private boolean recentOnly;
   private final boolean cacheNetworkFiles;
   private String sourceLabel;
 
@@ -107,7 +109,12 @@ public class LoadLocalDicom extends LoadDicom {
     if (files.length == 1 && files[0].isDirectory()) {
       sourceLabel = files[0].getName();
       if (FolderWatcher.isEnabled()) {
-        FolderWatcher.watchImported(files[0]);
+        if (FolderWatcher.holdsDailyFolders(files[0].toPath())) {
+          FolderWatcher.addFolder(files[0]);
+          recentOnly = true;
+        } else {
+          FolderWatcher.watchImported(files[0]);
+        }
       }
     }
   }
@@ -121,7 +128,7 @@ public class LoadLocalDicom extends LoadDicom {
   @Override
   protected Boolean doInBackground() throws Exception {
     startLoadingEvent();
-    if (files.length > 0) {
+    if (files.length > 0 && !recentOnly) {
       openingStrategy.prepareImport();
       int threads = Math.clamp(Runtime.getRuntime().availableProcessors(), 2, 8);
       ExecutorService executor = ThreadUtil.newFixedThreadPool(threads, "DicomFileReader");
