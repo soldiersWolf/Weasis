@@ -27,6 +27,7 @@ import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.FormatStyle;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
@@ -34,7 +35,9 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.StringJoiner;
+import java.util.WeakHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Predicate;
 import javax.swing.AbstractAction;
@@ -136,6 +139,12 @@ public class PatientListPanel extends JPanel
   private final JLabel count = new JLabel();
   private final JComboBox<String> sourceFilter = new JComboBox<>();
   // Studies read from folders and studies retrieved from servers are two separate lists
+  // Days shown: today, the last 3 days or the last week
+  private static final List<Integer> PERIODS = List.of(1, 3, 7);
+  private int days = initialDays();
+  // Studies opened from the ProScan database stay shown, whatever their date
+  private final Set<MediaSeriesGroup> picked = Collections.newSetFromMap(new WeakHashMap<>());
+  private final JPanel periodBar = new JPanel(new MigLayout("ins 0, gap 0, fillx", "")); // NON-NLS
   private final JToggleButton localTab = new JToggleButton();
   private final JToggleButton remoteTab = new JToggleButton();
   private final JPanel tabBar =
@@ -230,6 +239,7 @@ public class PatientListPanel extends JPanel
     localTab.setSelected(true);
     tabBar.setVisible(false);
     add(tabBar, "growx, hidemode 3"); // NON-NLS
+    add(buildPeriodBar(), "newline, growx"); // NON-NLS
     add(searchBar, "newline, growx"); // NON-NLS
     add(sourceFilter, "newline, growx, hidemode 3"); // NON-NLS
     add(count, "newline, growx"); // NON-NLS
@@ -422,6 +432,7 @@ public class PatientListPanel extends JPanel
 
   /** Shows the study whatever the search, tab and closed days, and selects it. */
   private boolean selectStudy(MediaSeriesGroup study) {
+    picked.add(study);
     search.setText("");
     showRemote = false;
     if (sourceFilter.getItemCount() > 0) {
@@ -502,6 +513,38 @@ public class PatientListPanel extends JPanel
     return rows;
   }
 
+  private static int initialDays() {
+    int saved = LocalPersistence.getProperties().getIntProperty(FolderWatcher.P_LIST_DAYS, 3);
+    return PERIODS.contains(saved) ? saved : 3;
+  }
+
+  private JPanel buildPeriodBar() {
+    ButtonGroup group = new ButtonGroup();
+    for (int period : PERIODS) {
+      JToggleButton button = new JToggleButton(PatientListMessages.getString("period." + period));
+      button.putClientProperty(
+          FlatClientProperties.BUTTON_TYPE, FlatClientProperties.BUTTON_TYPE_TAB);
+      button.setSelected(period == days);
+      button.addActionListener(
+          _ -> {
+            days = period;
+            // A week loads the older days of the watched folders; fewer days only hide them
+            FolderWatcher.showDays(period);
+            refresh();
+          });
+      group.add(button);
+      periodBar.add(button, "growx, sg period"); // NON-NLS
+    }
+    return periodBar;
+  }
+
+  /** Whether the visit falls within the days shown; a visit without date is always shown. */
+  private boolean inPeriod(VisitRow visit) {
+    return visit.date() == null
+        || picked.contains(visit.study())
+        || !visit.date().isBefore(LocalDate.now().minusDays(days - 1L));
+  }
+
   private List<VisitRow> collectVisits(String query, String sourceOnly, Boolean remoteOnly) {
     DicomModel model = explorer.getDataExplorerModel();
     String local = PatientListMessages.getString("source.local");
@@ -534,11 +577,13 @@ public class PatientListPanel extends JPanel
     Row selected = list.getSelectedValue();
     String query = search.getText().strip().toLowerCase(Locale.ROOT);
     updateTabs(collectVisits("", null, null));
-    List<VisitRow> all = collectVisits("", null, showRemote);
+    List<VisitRow> all =
+        collectVisits("", null, showRemote).stream().filter(this::inPeriod).toList();
     updateSourceFilter(all);
     String sourceOnly =
         sourceFilter.getSelectedIndex() > 0 ? (String) sourceFilter.getSelectedItem() : null;
-    List<VisitRow> visits = collectVisits(query, sourceOnly, showRemote);
+    List<VisitRow> visits =
+        collectVisits(query, sourceOnly, showRemote).stream().filter(this::inPeriod).toList();
     LocalDate latest =
         visits.stream().map(VisitRow::date).filter(Objects::nonNull).max(LocalDate::compareTo)
             .orElse(null);

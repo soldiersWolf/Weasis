@@ -58,6 +58,9 @@ public final class FolderWatcher {
   /** Preference key: how many days back the files are loaded and the sub-folders are listed. */
   public static final String P_DAYS = "weasis.dicom.folder.watch.days"; // NON-NLS
 
+  /** Local preference: the days shown by the patient list, loaded when beyond the default. */
+  public static final String P_LIST_DAYS = "patient.list.days"; // NON-NLS
+
   private static final String P_ROOTS = "folder.watch.roots"; // NON-NLS
   private static final String P_LEGACY_ROOT = "folder.watch.root"; // NON-NLS
   private static final String SEPARATOR = "\u001f";
@@ -67,7 +70,7 @@ public final class FolderWatcher {
   private static final List<Runnable> CHANGE_LISTENERS = new CopyOnWriteArrayList<>();
 
   private final BiConsumer<Path, List<File>> loader;
-  private final Duration window;
+  private volatile Duration window;
   private final Map<Path, Root> roots = new LinkedHashMap<>();
   private ScheduledExecutorService scheduler;
 
@@ -94,7 +97,9 @@ public final class FolderWatcher {
     if (instance != null || !isEnabled()) {
       return;
     }
-    int days = GuiUtils.getUICore().getSystemPreferences().getIntProperty(P_DAYS, 7);
+    int fallback = GuiUtils.getUICore().getSystemPreferences().getIntProperty(P_DAYS, 7);
+    // The period chosen in the patient list, when it asks for more days than the default
+    int days = Math.max(fallback, LocalPersistence.getProperties().getIntProperty(P_LIST_DAYS, 0));
     instance =
         new FolderWatcher(
             (root, files) ->
@@ -170,6 +175,25 @@ public final class FolderWatcher {
     }
     FolderWatcher watcher = instance;
     watcher.scheduler.execute(() -> watcher.removeRoot(folder));
+  }
+
+  /**
+   * Loads the files of more days, such as the last week, when the patient list asks for them.
+   * The older files are already stable, so they come within a couple of seconds.
+   */
+  public static void showDays(int days) {
+    LocalPersistence.getProperties().putIntProperty(P_LIST_DAYS, days);
+    FolderWatcher watcher = instance;
+    if (watcher == null) {
+      return;
+    }
+    int fallback = GuiUtils.getUICore().getSystemPreferences().getIntProperty(P_DAYS, 7);
+    Duration wanted = Duration.ofDays(Math.max(Math.max(1, fallback), days));
+    if (wanted.compareTo(watcher.window) > 0) {
+      watcher.window = wanted;
+      watcher.scheduler.execute(watcher::pollSafely);
+      watcher.scheduler.schedule(watcher::pollSafely, 1500, TimeUnit.MILLISECONDS);
+    }
   }
 
   /** Loads at once the files that appeared in the watched folders. */
