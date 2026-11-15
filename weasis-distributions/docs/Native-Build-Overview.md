@@ -70,8 +70,8 @@ The same principle applies: the installers bundle the prebuilt Temurin runtime a
 `weasis-distributions/script/launch-options.sh` is the single source of truth for the JDK modules and the launcher `--java-options` (per-OS options and options common to all platforms).
 The workflow (macOS, Windows) and `package-weasis.sh` (Linux) both source it with the platform as argument, so the launchers cannot drift apart.
 
-The **Dicomizer** launcher does not inherit these options: jpackage discards the command-line `--java-options` for a launcher whose properties file sets `java-options`.
-Any option it needs must be repeated in `resources/<platform>/dicomizer-launcher.properties`; the Dicomizer reads its configuration from `conf/dicomizer.json`.
+The installers of this viewer have a single launcher: the **Dicomizer** launcher and the acquisition bundles it runs are not packaged.
+To bring it back, pass `--add-launcher "Dicomizer=<resources>/dicomizer-launcher.properties"` to jpackage again and repeat in that file any option it needs, since jpackage discards the command-line `--java-options` for a launcher whose properties file sets `java-options`.
 
 ## 5. Deployment-specific customization
 
@@ -93,4 +93,4 @@ They are not part of the public distribution; when absent, the stock installers 
 | `weasis-distributions/script/package-weasis.sh` | jpackage build for one platform (Linux in CI, any platform locally) |
 | `weasis-distributions/script/launch-options.sh` | JDK modules and launcher options |
 | `weasis-distributions/docker/Dockerfile` | `weasis/builder` image for the Linux packages |
-| `weasis-distributions/script/resources/<platform>/` | icons, installer resources, Dicomizer launcher properties |
+| `weasis-distributions/script/resources/<platform>/` | icons, installer resources, the unused Dicomizer launcher properties |

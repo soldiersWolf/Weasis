@@ -245,17 +245,13 @@ if [ -d "${TEMP_PATH}" ] ; then
   rm -rf "${TEMP_PATH}"
 fi
 
+# This viewer ships without the Dicomizer launcher: the hospital does not turn photos into DICOM
 declare -a signArgs=()
-if [ "$machine" = "windows" ] ; then
-  DICOMIZER_CONFIG="Dicomizer=$RES\dicomizer-launcher.properties"
-else
-  DICOMIZER_CONFIG="Dicomizer=$RES/dicomizer-launcher.properties"
-  if [ "$machine" = "macosx" ] ; then
-    if [[ -n "$CERTIFICATE" ]] ; then
-      signArgs=("--mac-package-identifier" "$IDENTIFIER" "--mac-signing-key-user-name" "$CERTIFICATE" "--mac-sign")
-    else
-      signArgs=("--mac-package-identifier" "$IDENTIFIER")
-    fi
+if [ "$machine" = "macosx" ] ; then
+  if [[ -n "$CERTIFICATE" ]] ; then
+    signArgs=("--mac-package-identifier" "$IDENTIFIER" "--mac-signing-key-user-name" "$CERTIFICATE" "--mac-sign")
+  else
+    signArgs=("--mac-package-identifier" "$IDENTIFIER")
   fi
 fi
 
@@ -265,7 +261,7 @@ if [ "$machine" != "linux" ] || [ "$PACKAGE" = "NO" ] ; then
   # shellcheck disable=SC2154 # customOptions and commonOptions come from launch-options.sh
   $JPKGCMD --type app-image --input "$INPUT_DIR" --dest "$OUTPUT_PATH" --name "$NAME" \
   --main-jar weasis-launcher.jar --main-class org.weasis.launcher.AppLauncher --add-modules "$JDK_MODULES" \
-  --add-launcher "${DICOMIZER_CONFIG}" --resource-dir "$RES"  --app-version "$WEASIS_CLEAN_VERSION" \
+  --resource-dir "$RES"  --app-version "$WEASIS_CLEAN_VERSION" \
   "${tmpArgs[@]}" --verbose "${signArgs[@]}" "${customOptions[@]}" "${commonOptions[@]}"
 fi
 
@@ -297,7 +293,7 @@ if [ "$PACKAGE" = "YES" ] ; then
       # shellcheck disable=SC2154 # customOptions and commonOptions come from launch-options.sh
       $JPKGCMD --type "$installerType" --input "$INPUT_DIR" --dest "$OUTPUT_PATH" --name "$NAME" \
       --main-jar weasis-launcher.jar --main-class org.weasis.launcher.AppLauncher --add-modules "$JDK_MODULES" \
-      --add-launcher "${DICOMIZER_CONFIG}" --resource-dir "$RES" \
+      --resource-dir "$RES" \
       --license-file "$INPUT_PATH/Licence.txt" --description "Weasis DICOM viewer" --vendor "$VENDOR" \
       --copyright "$COPYRIGHT" --app-version "$WEASIS_CLEAN_VERSION" --file-associations "${curPath}/file-associations.properties" \
       --linux-app-release "$REVISON_INC" --linux-package-name "weasis" \

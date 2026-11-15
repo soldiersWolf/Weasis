@@ -255,7 +255,7 @@ jobs:
 
           jpackage --type app-image --input "${{ env.WEASIS_INPUT_BIN }}" --dest "${{ env.WEASIS_OUTPUT }}" --name "${{ env.NAME }}" \
           --main-jar weasis-launcher.jar --main-class org.weasis.launcher.AppLauncher --add-modules "$JDK_MODULES" \
-          --resource-dir "${{ env.RES }}" --app-version "${{ env.WEASIS_CLEAN_VERSION }}" --add-launcher "Dicomizer=${{ env.RES }}/dicomizer-launcher.properties" \
+          --resource-dir "${{ env.RES }}" --app-version "${{ env.WEASIS_CLEAN_VERSION }}" \
           "${signArgs[@]}" "${customOptions[@]}" "${commonOptions[@]}"
 
           if [ "$machine" = "macosx" ] && [ "$HAS_MAC_CERT" != "true" ] ; then

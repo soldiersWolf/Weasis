@@ -36,10 +36,10 @@ case "$1" in
     ;;
 esac
 
-# Options applied to the main Weasis launcher on every platform. The Dicomizer launcher does not
-# inherit them: jpackage drops the command line --java-options as soon as an --add-launcher
-# properties file defines java-options, so they are repeated in
-# resources/<platform>/dicomizer-launcher.properties.
+# Options applied to the Weasis launcher on every platform. The installers no longer add the
+# Dicomizer launcher; if it comes back, these options must be repeated in
+# resources/<platform>/dicomizer-launcher.properties, because jpackage drops the command line
+# --java-options as soon as an --add-launcher properties file defines java-options.
 commonOptions=("--java-options" "-Dgosh.port=17179" \
 "--java-options" "--enable-native-access=ALL-UNNAMED" \
 "--java-options" "-XX:MaxRAMPercentage=25" \
