@@ -54,6 +54,7 @@ public class ProScanSettingsPanel extends JPanel {
     autoDb.addActionListener(
         _ -> {
           LocalPersistence.getProperties().setProperty(ProScanDatabase.P_DATABASE, "");
+          LocalPersistence.save();
           refreshDatabase();
         });
     add(new JLabel(ProScanMessages.getString("settings.database")));
@@ -82,6 +83,7 @@ public class ProScanSettingsPanel extends JPanel {
               private void save() {
                 LocalPersistence.getProperties()
                     .setProperty(ProScanPrint.P_FACILITY, facility.getText().strip());
+                LocalPersistence.save();
               }
 
               @Override
@@ -156,6 +158,7 @@ public class ProScanSettingsPanel extends JPanel {
     if (chooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
       LocalPersistence.getProperties()
           .setProperty(ProScanDatabase.P_DATABASE, chooser.getSelectedFile().getPath());
+      LocalPersistence.save();
       refreshDatabase();
     }
   }

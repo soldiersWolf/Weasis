@@ -236,6 +236,7 @@ public final class ProScanExportDialog extends JDialog {
     }
     LocalPersistence.getProperties()
         .setProperty(P_LAST_FOLDER, file.get().getParent().toString());
+    LocalPersistence.save();
     setRunning(true);
     showStatus(ProScanMessages.getString("export.running"), false);
     cancelled = false;

@@ -133,6 +133,7 @@ public final class FolderWatcher {
     LocalPersistence.getProperties()
         .setProperty(
             P_ROOTS, String.join(SEPARATOR, folders.stream().map(Path::toString).toList()));
+    LocalPersistence.save();
     CHANGE_LISTENERS.forEach(Runnable::run);
   }
 
@@ -183,6 +184,7 @@ public final class FolderWatcher {
    */
   public static void showDays(int days) {
     LocalPersistence.getProperties().putIntProperty(P_LIST_DAYS, days);
+    LocalPersistence.save();
     FolderWatcher watcher = instance;
     if (watcher == null) {
       return;

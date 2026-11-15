@@ -9,6 +9,7 @@
  */
 package org.weasis.dicom.explorer.internal;
 
+import java.nio.file.Path;
 import org.osgi.annotation.bundle.Header;
 import org.osgi.framework.BundleActivator;
 import org.osgi.framework.BundleContext;
@@ -36,9 +37,9 @@ public class Activator implements BundleActivator {
     DicomManager.getInstance()
         .setPortableDirCache(
             !((cache != null) && cache.equalsIgnoreCase(Boolean.FALSE.toString())));
-    PropertiesUtil.loadProperties(
-        BundlePreferences.getFileInDataFolder(context, "import-export.properties"),
-        LocalPersistence.getProperties());
+    Path settings = BundlePreferences.getFileInDataFolder(context, LocalPersistence.FILE_NAME);
+    PropertiesUtil.loadProperties(settings, LocalPersistence.getProperties());
+    LocalPersistence.setFile(settings);
     LegacyConverters.register(AuthenticationPersistence.CONVERSION);
 
     AbstractDicomNode.registerLegacyConversions();
@@ -51,10 +52,7 @@ public class Activator implements BundleActivator {
   @Override
   public void stop(BundleContext context) {
     SegSpecialElement.setVolumeBuildExecutor(null);
-    PropertiesUtil.storeProperties(
-        BundlePreferences.getFileInDataFolder(context, "import-export.properties"),
-        LocalPersistence.getProperties(),
-        null);
+    LocalPersistence.saveNow();
 
     DicomModel.LOADING_EXECUTOR.shutdownNow();
     DataExplorerView explorer = GuiUtils.getUICore().getExplorerPlugin(DicomExplorer.NAME);

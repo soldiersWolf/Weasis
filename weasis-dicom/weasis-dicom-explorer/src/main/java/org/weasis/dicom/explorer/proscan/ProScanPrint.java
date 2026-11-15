@@ -102,6 +102,7 @@ public final class ProScanPrint implements Printable {
     }
     LocalPersistence.getProperties().setProperty(P_FACILITY, facility.getText().strip());
     LocalPersistence.getProperties().putBooleanProperty(P_TWO_PER_PAGE, two.isSelected());
+    LocalPersistence.save();
 
     PrinterJob job = PrinterJob.getPrinterJob();
     job.setJobName(ProScanMessages.getString("print.title"));

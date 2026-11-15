@@ -183,6 +183,11 @@ public final class ProScanDatabase {
     return LocalPersistence.getProperties().getProperty(P_DATABASE, "");
   }
 
+  /** Whether the user chose the database in the settings: it is then never asked again. */
+  public static boolean hasChosenDatabase() {
+    return !chosenSetting().isBlank();
+  }
+
   /**
    * A database to read: the shared one, else the archive copy of the most recent daily folder,
    * which holds every image up to the last one archived. Good for browsing and copies, never for

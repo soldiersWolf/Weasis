@@ -288,6 +288,7 @@ public class PatientListPanel extends JPanel
   /** Changes the view density of every patient list, from the preferences for instance. */
   public static void applyDensity(String density) {
     LocalPersistence.getProperties().setProperty(P_DENSITY, density);
+    LocalPersistence.save();
     GuiExecutor.execute(
         () ->
             INSTANCES.forEach(
@@ -323,6 +324,7 @@ public class PatientListPanel extends JPanel
           _ -> {
             density = d;
             LocalPersistence.getProperties().setProperty(P_DENSITY, d.name());
+            LocalPersistence.save();
             refresh();
           });
       group.add(item);

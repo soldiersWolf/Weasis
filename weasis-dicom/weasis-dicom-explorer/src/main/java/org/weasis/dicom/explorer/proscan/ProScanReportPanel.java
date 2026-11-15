@@ -79,6 +79,7 @@ public class ProScanReportPanel extends JPanel {
   private final JLabel status = new JLabel();
   private final JButton chooseDatabase =
       new JButton(ProScanMessages.getString("settings.choose.db"));
+  private final JButton retry = new JButton(ProScanMessages.getString("retry"));
   private Path image;
   private final JComboBox<Entry> doctor = new JComboBox<>();
   private final JComboBox<Entry> diagnosis = new JComboBox<>();
@@ -120,6 +121,11 @@ public class ProScanReportPanel extends JPanel {
     chooseDatabase.addActionListener(_ -> chooseWorkingDatabase());
     chooseDatabase.setVisible(false);
     add(chooseDatabase, "newline, span, left, hidemode 3"); // NON-NLS
+    retry.putClientProperty(
+        FlatClientProperties.BUTTON_TYPE, FlatClientProperties.BUTTON_TYPE_BORDERLESS);
+    retry.addActionListener(_ -> reload());
+    retry.setVisible(false);
+    add(retry, "newline, span, left, hidemode 3"); // NON-NLS
 
     for (JComboBox<Entry> combo : List.of(doctor, diagnosis)) {
       // A long conclusion must not widen the explorer
@@ -216,13 +222,24 @@ public class ProScanReportPanel extends JPanel {
   }
 
   private void reload() {
+    reload(true);
+  }
+
+  // A failed read is tried once more: just after Windows starts, the share is often not ready yet
+  private void reload(boolean retryOnError) {
     int current = ++generation;
     Path file = image;
     fill(null, null);
     setEditable(false);
     chooseDatabase.setVisible(false);
+    retry.setVisible(false);
     setStatus(ProScanMessages.getString("status.loading"), false);
-    EXECUTOR.execute(() -> load(file, current));
+    EXECUTOR.execute(() -> load(file, current, retryOnError));
+  }
+
+  /** The way to the database is offered only until one is chosen: then it is never asked again. */
+  private void offerDatabase(boolean needed) {
+    chooseDatabase.setVisible(needed && !ProScanDatabase.hasChosenDatabase());
   }
 
   /** Lets the user pick the database ProScan works with, then reads the report from it. */
@@ -233,6 +250,7 @@ public class ProScanReportPanel extends JPanel {
     if (chooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
       LocalPersistence.getProperties()
           .setProperty(ProScanDatabase.P_DATABASE, chooser.getSelectedFile().getPath());
+      LocalPersistence.save();
       if (image != null) {
         reload();
       }
@@ -260,7 +278,7 @@ public class ProScanReportPanel extends JPanel {
     }
   }
 
-  private void load(Path image, int current) {
+  private void load(Path image, int current, boolean retryOnError) {
     try {
       Optional<Visit> found = DATABASE.read(image);
       if (found.isEmpty()) {
@@ -270,7 +288,7 @@ public class ProScanReportPanel extends JPanel {
             () -> {
               if (current == generation) {
                 setStatus(ProScanMessages.getString(key), true);
-                chooseDatabase.setVisible(true);
+                offerDatabase(true);
               }
             });
         return;
@@ -285,17 +303,32 @@ public class ProScanReportPanel extends JPanel {
               boolean copy = found.get().archiveCopy();
               setEditable(!copy);
               setStatus(ProScanMessages.getString(copy ? "status.archive" : "status.loaded"), copy);
-              chooseDatabase.setVisible(copy);
+              offerDatabase(copy);
             }
           });
     } catch (Exception e) {
       LOGGER.error("Reading the ProScan report of {}", image, e);
       GuiExecutor.execute(
           () -> {
-            if (current == generation) {
-              setStatus(ProScanMessages.format("status.error", e.getMessage()), true);
-              chooseDatabase.setVisible(true);
+            if (current != generation) {
+              return;
             }
+            if (retryOnError) {
+              Timer again =
+                  new Timer(
+                      3_000,
+                      _ -> {
+                        if (current == generation) {
+                          reload(false);
+                        }
+                      });
+              again.setRepeats(false);
+              again.start();
+              return;
+            }
+            setStatus(ProScanMessages.format("status.error", e.getMessage()), true);
+            retry.setVisible(true);
+            offerDatabase(true);
           });
     }
   }
